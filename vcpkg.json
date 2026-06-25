@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "aima-framework",
+  "version": "0.1.0",
+  "description": "AIMA_framework — renderer-less, cross-platform game-app foundation (ECS + host loop + hot-reload + platform + Renderer interface). NO graphics libs: each project supplies its own renderer.",
+  "builtin-baseline": "216bb6975d5cccd35c27a14fb39acec3ae0e8285",
+  "dependencies": [
+    "sdl3",
+    "spdlog",
+    "efsw",
+    "nlohmann-json",
+    "tomlplusplus",
+    "entt",
+    "directxmath"
+  ],
+  "features": {
+    "physics": {
+      "description": "General-purpose Jolt physics (opt-in; enable AIMA_WITH_JOLT in CMake).",
+      "dependencies": [ "joltphysics" ]
+    }
+  }
+}

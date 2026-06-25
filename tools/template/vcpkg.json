@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "aima-game-starter",
+  "version": "0.1.0",
+  "description": "A blank game on the renderer-less aima framework. Starts as a black screen; grow your game in game/.",
+  "builtin-baseline": "216bb6975d5cccd35c27a14fb39acec3ae0e8285",
+  "dependencies": [
+    "sdl3",
+    "spdlog",
+    "efsw",
+    "nlohmann-json",
+    "tomlplusplus",
+    "entt",
+    "directxmath"
+  ]
+}

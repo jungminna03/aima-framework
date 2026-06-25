@@ -1,0 +1,24 @@
+{
+  "// aima game starter": "Build task used as the F5 preLaunchTask. Uses the CMake Tools task provider so it builds with the active preset (windows-debug / mac-arm64-debug / linux-x64-debug) and the aima_game target.",
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "cmake",
+      "label": "CMake: build",
+      "command": "build",
+      "preset": "${command:cmake.activeBuildPresetName}",
+      "targets": [
+        "aima_game"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$msCompile",
+        "$gcc"
+      ],
+      "detail": "Build aima_game with the active CMake build preset"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "desc": "A game built on aima_framework (renderer-less, hot-reload).",
+  "build": "VCPKG_ROOT=$HOME/vcpkg cmake --preset mac-arm64-debug && cmake --build --preset mac-arm64-debug",
+  "run": "build/mac-arm64-debug/bin/aima_game.app/Contents/MacOS/aima_game",
+  "shot": "AIMA_SHOT={png} AIMA_SHOTFRAME=30"
+}

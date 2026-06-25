@@ -1,0 +1,7 @@
+{
+  "// aima game starter": "Recommended VS Code extensions. The build is driven by CMakePresets.json + the vcpkg toolchain, so VS Code only needs CMake Tools + the C/C++ tools.",
+  "recommendations": [
+    "ms-vscode.cpptools",
+    "ms-vscode.cmake-tools"
+  ]
+}

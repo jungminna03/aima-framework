@@ -1,0 +1,17 @@
+{
+  "// aima game starter": "VS Code drives the build via CMakePresets.json + the vcpkg toolchain. The runnable project is the repo root (aima_game), so point CMake Tools at the workspace folder; it then offers the windows-debug / mac-arm64-debug / linux-x64-debug presets in the status bar.",
+  "//  ": "VCPKG_ROOT must be set in your environment (tools/setup-* persists it). The presets read $env{VCPKG_ROOT} to find the vcpkg toolchain file.",
+  "cmake.sourceDirectory": "${workspaceFolder}",
+  "cmake.useCMakePresets": "always",
+  "cmake.options.statusBarVisibility": "visible",
+  "cmake.configureOnOpen": true,
+  "cmake.buildBeforeRun": true,
+  "cmake.launchBehavior": "reuseTerminal",
+  "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "files.associations": {
+    "*.hpp": "cpp",
+    "*.h": "cpp",
+    "*.in": "cpp"
+  }
+}
