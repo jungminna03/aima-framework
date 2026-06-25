@@ -39,26 +39,6 @@
 
 문서는 "쓰는 일"이 아니라 **루프가 남기는 부산물**이 된다.
 
-### 실제 동작
-
-> 🖼️ **데모 캡처 추가 예정** — 텔레그램 그룹에서 자연어 감상을 던지면 aima쨩이 이를 작업으로
-> 정리하고 실제 코드를 수정·빌드·푸시하는 채팅 캡처가 여기에 들어갑니다.
-> 이미지를 `docs/aima-chan-demo.png` 로 추가하면 아래 줄의 주석을 해제해 바로 표시됩니다.
-
-<!-- ![aima쨩 동작 화면](docs/aima-chan-demo.png) -->
-
-```mermaid
-sequenceDiagram
-    participant Me as 나 (Telegram)
-    participant aima as aima쨩
-    participant Repo as 게임 repo
-    Me->>aima: "점프가 굼떠, 0.1초 더 빠르게"
-    aima->>aima: 감상 → 작업으로 정리 (문서 자동)
-    aima->>Repo: 코드 수정 · 빌드 · 푸시
-    aima-->>Me: "반영했어! 새 빌드 플레이해봐"
-    Me->>aima: (다시 플레이) "이제 좋아, 다음은 코요테 타임"
-```
-
 > **렌더러는 안 들어있다.** 엔진은 아무것도 안 그린다 — 각 게임이 `aima::Renderer` 를
 > 자기 그래픽으로 구현한다(3D, 2D, 단순 SDL clear, 무엇이든). 그래서 어떤 장르든 같은 토대를 쓴다.
 
