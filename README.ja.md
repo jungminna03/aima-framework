@@ -39,6 +39,26 @@
 
 ドキュメントは「書く作業」ではなく、**ループが残していく副産物** になる。
 
+### 実際の動作
+
+> 🖼️ **デモキャプチャ追加予定** — Telegram グループで自然言語の感想を投げると、aimaちゃんがそれを
+> タスクとして整理し、実際にコードを修正・ビルド・プッシュするチャットキャプチャがここに入ります。
+> 画像を `docs/aima-chan-demo.png` として追加すれば、下の行のコメントを外すだけで表示されます。
+
+<!-- ![aimaちゃんの動作画面](docs/aima-chan-demo.png) -->
+
+```mermaid
+sequenceDiagram
+    participant Me as 私 (Telegram)
+    participant aima as aimaちゃん
+    participant Repo as ゲーム repo
+    Me->>aima: 「ジャンプがもたつく、0.1秒速く」
+    aima->>aima: 感想 → タスクに整理（ドキュメント自動）
+    aima->>Repo: コード修正 · ビルド · プッシュ
+    aima-->>Me: 「反映したよ！新しいビルドをプレイしてみて」
+    Me->>aima: （再びプレイ）「いい感じ、次はコヨーテタイム」
+```
+
 > **レンダラーは入っていない。** エンジンは何も描かない — 各ゲームが `aima::Renderer` を
 > 自分のグラフィックで実装する（3D、2D、単純な SDL clear、何でも）。だからどんなジャンルでも同じ土台を使う。
 
@@ -102,6 +122,12 @@ aima_framework/
 回し、`aima::Renderer` 実装で描画する。入力はキーボード·マウス·ゲームパッドがひとつの
 `InputState` にまとめられて入ってくる。
 
+> **私の役割 — 設計者。** このシステムを構築するにあたり、エンジン内部のコード実装の大部分は AI に
+> 任せ、私は **Telegram API ↔ LLM をつなぐパイプライン設計とプロンプト最適化（Prompt
+> Engineering）に集中** した。「どうしゃべればどんな実装が出てくるか」を決める境界面 — 感想を
+> 構造化されたタスク指示に変えるプロンプト、ビルド・プッシュまでつながる自動化パイプライン — が
+> 私自身が設計した核心だ。
+
 ## IN vs 除外
 
 **IN:** クロスプラットフォームビルド + 汎用ライブラリ（SDL3, spdlog, efsw, nlohmann_json, tomlplusplus,
@@ -118,3 +144,7 @@ DX12/SDL_GPU — つまりすべてのグラフィック。
 
 詳細な契約（Renderer インターフェース·ゲームモジュール ABI·ホットリロード·新規プロジェクト）は [`USAGE_FOR_AI.md`](USAGE_FOR_AI.md)、
 ECS は [`arimu-framework/USAGE_FOR_AI.md`](arimu-framework/USAGE_FOR_AI.md) を参照。
+
+---
+
+<sub>📝 この README は AI が制作・修正しています。</sub>

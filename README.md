@@ -39,6 +39,26 @@
 
 문서는 "쓰는 일"이 아니라 **루프가 남기는 부산물**이 된다.
 
+### 실제 동작
+
+> 🖼️ **데모 캡처 추가 예정** — 텔레그램 그룹에서 자연어 감상을 던지면 aima쨩이 이를 작업으로
+> 정리하고 실제 코드를 수정·빌드·푸시하는 채팅 캡처가 여기에 들어갑니다.
+> 이미지를 `docs/aima-chan-demo.png` 로 추가하면 아래 줄의 주석을 해제해 바로 표시됩니다.
+
+<!-- ![aima쨩 동작 화면](docs/aima-chan-demo.png) -->
+
+```mermaid
+sequenceDiagram
+    participant Me as 나 (Telegram)
+    participant aima as aima쨩
+    participant Repo as 게임 repo
+    Me->>aima: "점프가 굼떠, 0.1초 더 빠르게"
+    aima->>aima: 감상 → 작업으로 정리 (문서 자동)
+    aima->>Repo: 코드 수정 · 빌드 · 푸시
+    aima-->>Me: "반영했어! 새 빌드 플레이해봐"
+    Me->>aima: (다시 플레이) "이제 좋아, 다음은 코요테 타임"
+```
+
 > **렌더러는 안 들어있다.** 엔진은 아무것도 안 그린다 — 각 게임이 `aima::Renderer` 를
 > 자기 그래픽으로 구현한다(3D, 2D, 단순 SDL clear, 무엇이든). 그래서 어떤 장르든 같은 토대를 쓴다.
 
@@ -102,6 +122,11 @@ aima_framework/
 돌리고, `aima::Renderer` 구현으로 그린다. 입력은 키보드·마우스·게임패드가 하나의
 `InputState` 로 합쳐져 들어온다.
 
+> **내 역할 — 설계자.** 이 시스템을 구축하면서 엔진 내부 코드 구현의 상당 부분은 AI에 맡기고,
+> 나는 **Telegram API ↔ LLM 을 잇는 파이프라인 설계와 프롬프트 최적화(Prompt Engineering)에
+> 집중**했다. "어떻게 떠들면 어떤 구현이 나오는가"를 결정하는 경계면 — 감상을 구조화된 작업
+> 지시로 바꾸는 프롬프트, 빌드·푸시까지 이어지는 자동화 파이프라인 — 이 내가 직접 설계한 핵심이다.
+
 ## IN vs 제외
 
 **IN:** 크로스플랫폼 빌드 + 범용 라이브러리(SDL3, spdlog, efsw, nlohmann_json, tomlplusplus,
@@ -118,3 +143,7 @@ DX12/SDL_GPU — 즉 모든 그래픽.
 
 상세 계약(Renderer 인터페이스·게임 모듈 ABI·핫리로드·새 프로젝트)은 [`USAGE_FOR_AI.md`](USAGE_FOR_AI.md),
 ECS는 [`arimu-framework/USAGE_FOR_AI.md`](arimu-framework/USAGE_FOR_AI.md) 참고.
+
+---
+
+<sub>📝 이 README는 AI가 제작·수정하고 있습니다.</sub>
