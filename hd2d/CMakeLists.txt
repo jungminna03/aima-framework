@@ -103,3 +103,20 @@ else()
         message(STATUS "SDL3_shadercross found — runtime HLSL cross-compile enabled")
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# game_core 표준 플러그인 세트 승격(2026-07-13): render/sprite/physics/sound/ui/
+# input_mapper 의 .cpp 를 프레임워크가 소유한다. 단, 이들은 게임 레이어 헤더
+# (game/resources.h·scene_enum.h·combat_components.h 등)를 소비자 include 경로로
+# 참조하므로(=game_core/clip_rules.h 가 game/components.h 를 참조하는 선례) 프레임워크
+# 라이브러리에 직접 컴파일하지 않고, HD2D hd2d_game(SHARED, 핫리로드) 타깃이
+# target_sources 로 흡수한다. 절대경로 목록을 최상위 스코프까지 CACHE INTERNAL 로 전달.
+# ---------------------------------------------------------------------------
+set(AIMA_HD2D_GAME_CORE_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/render_plugin.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/sprite_plugin.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/physics_plugin.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/sound_plugin.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/ui_plugin.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/input_mapper_plugin.cpp"
+    CACHE INTERNAL "HD2D 표준 플러그인 세트(승격) — hd2d_game 이 소스로 흡수")

@@ -65,6 +65,14 @@ struct BillboardSprite {
     float scale_y = 1.0f;   // 세로(발밑 고정)
     float hop_dist = 0.0f;  // 누적 수평 이동거리(홉 위상)
     float death_t = 0.0f;   // 죽음 진행[0,1]
+
+    // 전투 틴트(2026-07-13 렌더러 승격 역전): 프레임워크 render_plugin은 전투 상태를
+    // 직접 읽지 않는다 — 게임측 CombatTintSystem(combat_plugin)이 매 프레임 이 값을
+    // 채우고(피격 플래시/사망 암전/파이어볼 HDR 발광), 렌더는 곱해 그릴 뿐. 기본 1 =
+    // 무채색. ⚠️ 레이아웃 변경 = GameStateVersion 범프(구조체 END 추가).
+    float tint_r = 1.0f;
+    float tint_g = 1.0f;
+    float tint_b = 1.0f;
 };
 
 } // namespace hd2d
