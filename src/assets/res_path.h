@@ -15,6 +15,7 @@
 
 #include "core/log.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -22,12 +23,18 @@ namespace aima::res {
 
 namespace detail {
 inline std::string& root_storage() {
-    static std::string root =
+    // Priority: AIMA_ASSET_DIR env var (a portable/distributed build ships
+    // assets/ next to the exe and exports this at startup) > the
+    // AIMA_ASSET_DIR compile definition (source-tree path, dev hot-reload) >
+    // "assets" relative to cwd.
+    static std::string root = [] {
+        if (const char* e = std::getenv("AIMA_ASSET_DIR"); e && *e) return std::string(e);
 #ifdef AIMA_ASSET_DIR
-        AIMA_ASSET_DIR;
+        return std::string(AIMA_ASSET_DIR);
 #else
-        "assets";
+        return std::string("assets");
 #endif
+    }();
     return root;
 }
 } // namespace detail
@@ -55,6 +62,19 @@ inline std::string resolve(const std::string& sub, const std::string& name,
     AIMA_WARN("res: '{}' not found under {} (tried {} extensions)", name, dir.string(),
               static_cast<int>(exts.size()));
     return {};
+}
+
+// Convention: level/map name -> assets/map/<name>.glb (.gltf fallback, tried
+// deterministically when both exist). Missing map: warn + empty string (via
+// resolve()) so the caller can skip the load instead of crashing.
+inline std::string map_path(const std::string& name) {
+    return resolve("map", name, {".glb", ".gltf"});
+}
+
+// Sprite sheets load lazily elsewhere, so this only builds the path — no
+// existence check, no warning here (the loader logs if the file is missing).
+inline std::string sprite_path(const std::string& name) {
+    return path("sprite", name, ".png");
 }
 
 } // namespace aima::res
