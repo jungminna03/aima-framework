@@ -218,7 +218,7 @@ GpuTexture upload_texture_rgba8_mips(Dx12Device& dev, uint32_t width, uint32_t h
 }
 
 GpuTexture upload_texture_rgba8(Dx12Device& dev, uint32_t width, uint32_t height,
-                                const uint8_t* rgba) {
+                                const uint8_t* rgba, bool srgb) {
     GpuTexture tex;
     tex.width = width;
     tex.height = height;
@@ -233,9 +233,10 @@ GpuTexture upload_texture_rgba8(Dx12Device& dev, uint32_t width, uint32_t height
     td.Height = height;
     td.DepthOrArraySize = 1;
     td.MipLevels = 1;
-    // PNG sprites are authored in sRGB; the _SRGB view linearizes on sample so
-    // they light correctly in the linear pipeline.
-    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    // srgb=true: PNG는 sRGB로 저작 — _SRGB 뷰가 샘플 시 리니어화해 조명 파이프라인에서
+    // 맞게 계산된다(월드 스프라이트). srgb=false: UI/ImGui — 백버퍼(UNORM) 직행이라
+    // 리니어화하면 재인코드 없이 γ만큼 어두워진다(2026-07-10, tools/ingame_color_check.py).
+    td.Format = srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
     td.SampleDesc.Count = 1;
     td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     if (FAILED(d->CreateCommittedResource(&def_heap, D3D12_HEAP_FLAG_NONE, &td,
@@ -300,7 +301,7 @@ GpuTexture upload_texture_rgba8(Dx12Device& dev, uint32_t width, uint32_t height
         return tex;
     }
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-    sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    sd.Format = srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     sd.Texture2D.MipLevels = 1;

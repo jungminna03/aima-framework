@@ -38,6 +38,7 @@
 #include <filesystem>        // 모듈 복사/스테일 복사본 청소 (전 플랫폼)
 
 #include <cmath>
+#include <cstdio>            // snprintf (AIMA_REC 프레임 덤프 경로)
 #include <cstdlib>
 #include <string>
 
@@ -332,6 +333,19 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
     int max_frames = cfg.max_frames;
     if (const char* mf = std::getenv("AIMA_MAXFRAMES")) max_frames = std::atoi(mf);
 
+    // ---- headless video capture -----------------------------------------------
+    // AIMA_REC=<dir>: dump every rendered frame as f_%06d.png into <dir> between
+    // AIMA_REC_FROM (default 0) and AIMA_REC_UNTIL (default 1800), then self-exit.
+    // The window is created hidden (window.cpp) so a capture run doesn't take over
+    // the screen. Pair with AIMA_FIXEDSTEP=1: the PNG writes slow the loop far below
+    // real time, but a constant 1/60 dt keeps the sim time-correct — assemble with
+    // `ffmpeg -framerate 60 -i f_%06d.png`.
+    const char* rec_dir = std::getenv("AIMA_REC");
+    int rec_from = 0, rec_until = 1800;
+    if (const char* v = std::getenv("AIMA_REC_FROM"))  rec_from  = std::atoi(v);
+    if (const char* v = std::getenv("AIMA_REC_UNTIL")) rec_until = std::atoi(v);
+    if (rec_dir) AIMA_INFO("[rec] frame dump -> {} (frames {}..{})", rec_dir, rec_from, rec_until);
+
     uint64_t prev = SDL_GetPerformanceCounter();
     const double freq = static_cast<double>(SDL_GetPerformanceFrequency());
     int frame_no = 0;
@@ -545,6 +559,14 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
         // Headless self-exit (no `timeout` needed).
         if (shot_path && frame_no == shot_frame) renderer.screenshot(shot_path);
         if (shot_path && frame_no >= shot_frame + 2) running = false;
+        if (rec_dir) {
+            if (frame_no >= rec_from && frame_no <= rec_until) {
+                char rp[512];
+                std::snprintf(rp, sizeof rp, "%s/f_%06d.png", rec_dir, frame_no);
+                renderer.screenshot(rp);   // consumed at the NEXT end_frame
+            }
+            if (frame_no >= rec_until + 2) running = false;
+        }
         if (max_frames > 0 && frame_no >= max_frames) running = false;
     }
 

@@ -35,7 +35,7 @@ create_upload_buffer(Dx12Device&, const void*, size_t) {
 }
 
 GpuTexture upload_texture_rgba8(Dx12Device& dev, uint32_t width, uint32_t height,
-                                const uint8_t*) {
+                                const uint8_t*, bool) {
     GpuTexture tex;
     tex.width = width;
     tex.height = height;

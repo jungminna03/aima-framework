@@ -30,7 +30,8 @@ bool Window::init(const std::string& title, uint32_t width, uint32_t height) {
     // and the screenshot reads the backbuffer, so nothing else changes.
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     const char* shot = SDL_getenv("AIMA_SHOT");
-    if (shot && *shot) flags |= SDL_WINDOW_HIDDEN;
+    const char* rec  = SDL_getenv("AIMA_REC");   // 프레임 덤프 녹화 런도 화면을 안 뺏는다
+    if ((shot && *shot) || (rec && *rec)) flags |= SDL_WINDOW_HIDDEN;
 
     window_ = SDL_CreateWindow(title.c_str(),
                                static_cast<int>(width),

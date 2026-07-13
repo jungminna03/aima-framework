@@ -59,8 +59,12 @@ create_upload_buffer(Dx12Device& dev, const void* data, size_t size);
 
 // Upload tightly-packed RGBA8 pixels to a DEFAULT-heap texture and register an
 // SRV in the device's shared heap.
+// srgb=true (기본): _SRGB 뷰 — 월드(조명/톤맵) 파이프라인용, 샘플 시 리니어화.
+// srgb=false: UNORM — **UI/ImGui 경로용**. UI는 백버퍼(UNORM)에 직행하므로 _SRGB 뷰면
+// 리니어화만 되고 재인코드가 없어 γ만큼 어두워진다(2026-07-10 실측: 종이
+// (198,172,138)→(144,105,65), 정확히 srgb_to_linear 값). 저작 픽셀 = 화면 픽셀이 계약.
 GpuTexture upload_texture_rgba8(Dx12Device& dev, uint32_t width, uint32_t height,
-                                const uint8_t* rgba);
+                                const uint8_t* rgba, bool srgb = true);
 
 // Same, but with a full CPU-generated mip chain (box filter in linear space).
 // srgb=true creates an _SRGB view (base color / emissive maps); false keeps
