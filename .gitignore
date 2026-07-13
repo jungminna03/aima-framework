@@ -1,6 +1,18 @@
-/build/
-/cmake-build*/
-.DS_Store
-.idea/
-.vs/
+# build output
+build/
+build*/
+cmake-build-*/
 out/
+vcpkg_installed/
+
+# compiled binaries / objects
+*.dylib
+*.so
+*.a
+*.o
+*.obj
+*.exe
+*.pdb
+
+# os
+.DS_Store

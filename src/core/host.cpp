@@ -29,13 +29,13 @@
 #include <dlfcn.h>
 #include <chrono>
 #include <cstdlib>
-#include <filesystem>
+#include <unistd.h>          // getpid (모듈 복사명), linux readlink
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>     // _NSGetExecutablePath
-#elif defined(__linux__)
-#include <unistd.h>          // readlink
 #endif
 #endif
+
+#include <filesystem>        // 모듈 복사/스테일 복사본 청소 (전 플랫폼)
 
 #include <cmath>
 #include <cstdlib>
@@ -59,6 +59,26 @@ namespace {
 // file, so a rebuild at the original path would keep running STALE code. Copying
 // every rebuild to a fresh path forces a genuine fresh load.
 // --------------------------------------------------------------------------
+// Dead processes leave their per-PID module copies behind (each live process
+// intentionally leaks its own). Sweep them best-effort at FIRST load: copies
+// still mapped by a live instance refuse deletion and are skipped — which is
+// exactly the wanted contract. (2026-07-02: 복사명이 프로세스-로컬 카운터
+// "_loaded<N>"뿐이라 두 인스턴스가 같은 이름을 두고 경합, 두 번째 실행이
+// "copy failed (32)"로 즉사했다 — 이름에 PID를 넣어 경합 자체를 제거.)
+void sweep_stale_module_copies(const std::filesystem::path& module_path) {
+    std::error_code ec;
+    const std::filesystem::path dir = module_path.parent_path();
+    const std::string prefix = module_path.stem().string() + "_loaded";
+    std::filesystem::directory_iterator it(dir, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const std::filesystem::path& p = it->path();
+        if (p.extension() != module_path.extension()) continue;
+        if (p.stem().string().rfind(prefix, 0) != 0) continue;
+        std::error_code rm;
+        std::filesystem::remove(p, rm);   // 살아있는 인스턴스가 잠근 복사본 → 조용히 스킵
+    }
+}
+
 struct GameModule {
     GameStateVersionFn version = nullptr;
     GameRegisterFn     reg     = nullptr;
@@ -81,8 +101,13 @@ struct GameModule {
 
     bool load() {
         static int gen = 0;
+        if (gen == 0) sweep_stale_module_copies(std::filesystem::path(dll));
         loaded = dll;
-        loaded.replace(loaded.find(L".dll"), 4, L"_loaded" + std::to_wstring(++gen) + L".dll");
+        // 복사명에 PID 포함 — 동시 인스턴스(유저 플레이 + 헤드리스 검증)가 같은
+        // 이름을 두고 경합해 두 번째 실행이 죽던 것(copy failed 32)을 구조적으로 제거.
+        loaded.replace(loaded.find(L".dll"), 4,
+                       L"_loaded" + std::to_wstring(GetCurrentProcessId()) + L"_" +
+                           std::to_wstring(++gen) + L".dll");
         if (!CopyFileW(dll.c_str(), loaded.c_str(), FALSE)) {
             AIMA_ERROR("[code-reload] copy failed ({})", GetLastError());
             return false;
@@ -119,9 +144,11 @@ struct GameModule {
     bool load() {
         static int gen = 0;
         std::filesystem::path src(dll);
+        if (gen == 0) sweep_stale_module_copies(src);
         std::filesystem::path dst = src;
-        dst.replace_filename(src.stem().string() + "_loaded" + std::to_string(++gen) +
-                             src.extension().string());
+        // 복사명에 PID 포함 — Windows 브랜치와 같은 동시-인스턴스 경합 제거.
+        dst.replace_filename(src.stem().string() + "_loaded" + std::to_string(getpid()) +
+                             "_" + std::to_string(++gen) + src.extension().string());
         loaded = dst.string();
 
         std::error_code ec;

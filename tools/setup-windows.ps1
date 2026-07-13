@@ -48,6 +48,12 @@ $FrameworkDir = Split-Path -Parent $PSScriptRoot          # ...\MyGame\aima_fram
 $RepoRoot     = Split-Path -Parent $FrameworkDir          # ...\MyGame  (the project)
 $TemplateDir  = Join-Path $FrameworkDir 'tools\template'
 $Preset       = "windows-$Config"
+# Existing projects may ship their own CMakePresets.json with plain debug/release
+# preset names (the template uses windows-*) — follow whatever the project defines.
+$PresetFile = Join-Path $RepoRoot 'CMakePresets.json'
+if ((Test-Path $PresetFile) -and ((Get-Content $PresetFile -Raw) -notmatch "`"windows-$Config`"")) {
+    $Preset = $Config
+}
 
 function Info($m){ Write-Host "==> $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "    $m" -ForegroundColor Green }
@@ -83,7 +89,7 @@ function Ensure-WingetPackage {
 function Find-VsInstall {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path $vswhere)) { return $null }
-    & $vswhere -latest -products * `
+    & $vswhere -latest -prerelease -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath 2>$null | Select-Object -First 1
 }
@@ -233,24 +239,53 @@ Ensure-WingetPackage -Id 'Ninja-build.Ninja' -ProbeCommand 'ninja'
 Ensure-WingetPackage -Id 'Git.Git'           -ProbeCommand 'git'
 
 # --- 2. Visual Studio 2022 Build Tools (MSVC toolchain + Windows SDK) --------
+$VcComponents = @(
+    '--add', 'Microsoft.VisualStudio.Workload.VCTools',
+    '--add', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+    '--add', 'Microsoft.VisualStudio.Component.Windows11SDK.22621',
+    '--includeRecommended'
+)
+
+# Any VS/Build Tools install, regardless of installed workloads (Find-VsInstall
+# filters on the C++ toolchain component, so it misses C++-less installs).
+function Find-AnyVsInstall {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) { return $null }
+    & $vswhere -latest -prerelease -products * -property installationPath 2>$null | Select-Object -First 1
+}
+
 $vs = Find-VsInstall
 if (-not $vs) {
-    Info "Installing Visual Studio 2022 Build Tools (MSVC + Windows SDK)..."
-    Warn "Multi-GB download; a UAC / admin prompt may appear."
-    $override = '--quiet --wait --norestart ' +
-        '--add Microsoft.VisualStudio.Workload.VCTools ' +
-        '--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 ' +
-        '--add Microsoft.VisualStudio.Component.Windows11SDK.22621 ' +
-        '--includeRecommended'
-    winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
-        --accept-source-agreements --accept-package-agreements `
-        --override "$override"
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
-        throw "Build Tools install failed (exit $LASTEXITCODE)."
+    $anyVs = Find-AnyVsInstall
+    if ($anyVs) {
+        # VS is registered but the C++ workload is missing (typically an earlier quiet
+        # install that died mid-way). winget reports 'already installed' and does
+        # nothing, so drive the VS Installer directly to add the workload.
+        Info "Found Visual Studio at $anyVs without the MSVC toolchain; adding the C++ workload..."
+        Warn "Multi-GB download; a UAC / admin prompt may appear."
+        $vsSetup = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
+        $vsArgs = @('modify', '--installPath', "$anyVs") + $VcComponents + @('--quiet', '--norestart')
+        $vsProc = Start-Process -FilePath $vsSetup -ArgumentList $vsArgs -Wait -PassThru
+        # 3010 = success, reboot required.
+        if ($vsProc.ExitCode -ne 0 -and $vsProc.ExitCode -ne 3010) {
+            throw "VS Installer modify failed (exit $($vsProc.ExitCode)). Open 'Visual Studio Installer' and add the 'Desktop development with C++' workload manually, then re-run."
+        }
+    } else {
+        Info "Installing Visual Studio 2022 Build Tools (MSVC + Windows SDK)..."
+        Warn "Multi-GB download; a UAC / admin prompt may appear."
+        $override = "--quiet --wait --norestart $($VcComponents -join ' ')"
+        winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
+            --accept-source-agreements --accept-package-agreements `
+            --override "$override"
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
+            # Exit 1 from the VS bootstrapper usually means: not elevated / UAC declined,
+            # another VS Installer instance running, or a pending reboot.
+            throw "Build Tools install failed (exit $LASTEXITCODE). Try again from an elevated (admin) PowerShell, close any open Visual Studio Installer, or reboot and re-run."
+        }
     }
     $vs = Find-VsInstall
 }
-if (-not $vs) { throw "MSVC toolchain still not found after install. Re-run this script in a new shell." }
+if (-not $vs) { throw "MSVC toolchain still not found after install. Re-run this script in a new shell (or reboot if the installer asked for it)." }
 Ok "MSVC toolchain: $vs"
 
 # --- 3. vcpkg (manifest mode) -----------------------------------------------
@@ -306,7 +341,24 @@ if (Test-Path $devShell) {
 Info "Configuring (cmake --preset $Preset)..."
 Push-Location $RepoRoot
 try {
-    cmake --preset "$Preset"
+    # Explicit overrides make configure robust on fresh machines:
+    #  - ninja lives behind a winget Links shim the DevShell PATH may miss -> full path
+    #  - a project's presets may hard-code another machine's vcpkg path -> this vcpkg
+    $cfgArgs = @('--preset', "$Preset")
+    $ninjaCmd = Get-Command ninja -ErrorAction SilentlyContinue
+    if ($ninjaCmd) { $cfgArgs += "-DCMAKE_MAKE_PROGRAM=$($ninjaCmd.Source)" }
+    $cfgArgs += "-DCMAKE_TOOLCHAIN_FILE=$(Join-Path $vcpkgRoot 'scripts\buildsystems\vcpkg.cmake')"
+    cmake @cfgArgs
+    if ($LASTEXITCODE -ne 0) {
+        # A failed earlier configure leaves a poisoned CMakeCache (e.g. a cached
+        # CMAKE_MAKE_PROGRAM-NOTFOUND) -> wipe the build dir and retry once.
+        $cacheDir = Join-Path $RepoRoot "build\$Preset"
+        if (Test-Path (Join-Path $cacheDir 'CMakeCache.txt')) {
+            Warn "Configure failed; clearing stale cache ($cacheDir) and retrying..."
+            Remove-Item -Recurse -Force $cacheDir
+            cmake @cfgArgs
+        }
+    }
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed." }
     Info "Building (cmake --build --preset $Preset)..."
     cmake --build --preset "$Preset"

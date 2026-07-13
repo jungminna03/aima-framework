@@ -90,8 +90,11 @@ hard-codes no absolute paths.
 4. **Code hot-reload + the game-module ABI** — the dlopen/LoadLibrary loader, the
    per-generation copy, the macOS ad-hoc codesign, the mtime poll, the versioned
    ABI (§3, §5).
-5. **The platform layer** — `Window` (SDL3), `InputState` mailbox, `AudioDevice`
-   (opaque ids).
+5. **The platform layer (the OS-abstraction seams)** — `Window` (SDL3), `InputState`
+   mailbox (keyboard/mouse **+ gamepad**: sticks `pad_l/rx,y`, digital `pad_btn_*` with
+   the `PadButton` enum + `pad_down/pressed` helpers), `AudioDevice` (opaque ids). Game
+   logic reads ONLY these — never SDL/OS directly — so behaviour is identical on every
+   OS (this is the Platform Abstraction Layer; see the callout below).
 6. **The ECS** — Arimu (vendored, with its single-header EnTT).
 7. **Asset scaffolding (general)** — `res_path.h` (name→path convention) + the
    efsw file-watch reload. **NOT** the GPU loaders.
@@ -108,11 +111,25 @@ hard-codes no absolute paths.
 
 The framework gives you the `aima::Renderer` seam; you fill it.
 
+> **Platform Abstraction Layer (PAL) — the load-bearing principle.** Every machine/OS-
+> dependent capability sits behind a framework seam: GPU → `aima::Renderer` (opaque frame
+> handle, the project draws), input → `aima::InputState` (keyboard/mouse/gamepad), audio →
+> `aima::AudioDevice`, window/cursor → `aima::Window`, time/loop → `aima::Host` (with opt-in
+> fixed-timestep determinism). **Game logic depends ONLY on these seams — never on SDL /
+> D3D12 / Metal / getenv / OS APIs directly.** That is what makes a build behave identically
+> on Windows and macOS — it is the layer that kills the "works on mac only / windows only"
+> class of bugs. A project's own higher-level abstractions (e.g. a high-level scene-render
+> API built ON TOP of `aima::Renderer`) live in the PROJECT, keeping the framework
+> renderer-agnostic.
+
 ### Frame anatomy (what `aima::Host` does each tick)
 
 1. Pump SDL events → fill a generic `InputState` (movement, mouse, common edges).
-2. Compute `dt` (clamped); poll the **asset/shader** watcher (efsw); poll for a
-   newer **game module** on disk and hot-swap if found.
+2. Compute `dt` (clamped). **Determinism:** `AIMA_FIXEDSTEP` (or `HD2D_FIXEDSTEP`) feeds
+   a CONSTANT dt (1/60) so the sim is machine-speed-independent — reproducible headless
+   runs + identical behaviour across machines; default keeps wall-clock dt for smooth
+   live play. Then poll the **asset/shader** watcher (efsw); poll for a newer **game
+   module** on disk and hot-swap if found.
 3. Marshal `InputState` into the World resource; call your optional `frame_hook`.
 4. `renderer.begin_frame(clear_color)` → opaque frame handle.
 5. `app.Tick(scene, dt)` — runs the active scene's systems in phase order; your

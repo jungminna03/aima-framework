@@ -24,14 +24,23 @@ bool Window::init(const std::string& title, uint32_t width, uint32_t height) {
         return false;
     }
 
+    // Headless capture runs (AIMA_SHOT: render N frames, screenshot, exit) keep
+    // popping a real window over whatever the user is doing — create it HIDDEN
+    // instead. D3D12/SDL_GPU render into a hidden window's swapchain just fine,
+    // and the screenshot reads the backbuffer, so nothing else changes.
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    const char* shot = SDL_getenv("AIMA_SHOT");
+    if (shot && *shot) flags |= SDL_WINDOW_HIDDEN;
+
     window_ = SDL_CreateWindow(title.c_str(),
                                static_cast<int>(width),
                                static_cast<int>(height),
-                               SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                               flags);
     if (!window_) {
         AIMA_ERROR("SDL_CreateWindow failed: {}", SDL_GetError());
         return false;
     }
+    if (flags & SDL_WINDOW_HIDDEN) AIMA_INFO("window hidden (AIMA_SHOT headless run)");
 
     width_ = width;
     height_ = height;
