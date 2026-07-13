@@ -1,18 +1,22 @@
 # AIMA_framework — Manual for AI Assistants
 
 You are an AI assistant about to build (or extend) a game **on top of**
-**AIMA_framework** — a small, **renderer-less**, cross-platform game-app
-foundation. This document is your contract. Read §1 once, keep §2–§4 open while
-you write code, and copy the example in §7.
+**AIMA_framework** — a cross-platform game-app foundation whose headline job is
+**mass-producing uniform-quality HD2D games**. This document is your contract.
+Read §1 once, keep §2–§4 open while you write code, copy the example in §7, and
+read **§9 (the hd2d module contract)** if you build the HD2D path.
 
-> **The one thing to internalize: AIMA_framework draws NOTHING.** It is the
-> reusable, engine-agnostic foundation — the cross-platform build, general-purpose
-> libraries, the host loop, code + asset hot-reload, the SDL platform layer, the
-> ECS, and an abstract **Renderer interface**. Every pixel is drawn by an
-> `aima::Renderer` implementation **your project supplies** with its own graphics
-> (DX12, SDL_GPU/Metal, Siv3D, a bare SDL clear — whatever fits). AIMA's HD-2D game
-> is 3D; a Siv3D game is 2D; the framework is identical underneath both because the
-> renderer is **out of scope** for it.
+> **Two operating modes.** (1) **Batteries-included HD2D** — turn on the built-in
+> HD2D renderer module (`AIMA_HD2D_RENDERER=ON` + vcpkg feature `hd2d-renderer`)
+> and the framework draws a full HD-2D scene for you: DX12(Windows)/SDL_GPU(Metal)
+> backends, bloom + AgX post, LiveScene submission, sprite/billboard, paper-anim
+> math, and the render/sprite/physics/sound/ui/input standard plugin set. This is
+> the default way to start a new game. See **§9**.
+> (2) **Bring-your-own renderer** — leave it OFF (the framework core stays
+> renderer-less) and every pixel is drawn by an `aima::Renderer` implementation
+> **your project supplies** with its own graphics (Siv3D 2D, a bare SDL clear,
+> another 3D backend). The abstract **`aima::Renderer` seam** (§4) is the same in
+> both modes — the HD2D module is just an implementation of it that ships in-repo.
 
 This folder is meant to be **copy-pasted** into a new project. It is
 self-contained: it vendors the Arimu ECS, documents its deps in `vcpkg.json`, and
@@ -145,9 +149,11 @@ The framework gives you the `aima::Renderer` seam; you fill it.
    it PUBLIC. Two EnTT copies = two incompatible `entt::registry` ABIs in one link
    graph = silent corruption across the host/game module boundary. The whole project
    shares Arimu's EnTT transitively. (See the comment in `CMakeLists.txt`.)
-2. **No graphics libs in the framework.** If you find yourself adding imgui / a GPU
-   API / a mesh optimizer to `aima-framework/`, stop: that belongs next to your
-   renderer in *your* project. The framework stays renderer-less.
+2. **No graphics libs in the framework CORE.** The core (`src/`, `include/aima/`)
+   stays renderer-less — no imgui / GPU API / mesh optimizer there. Graphics libs
+   live in the **`hd2d/` module** (gated by `AIMA_HD2D_RENDERER`, see §9) or, in
+   BYO-renderer mode, next to your renderer in *your* project. Never let a GPU dep
+   leak into the core CMake target `aima::framework`.
 3. **The game module never opens a window or owns the renderer.** Those are HOST
    concerns. The game writes to resources; the host services them around `Tick`.
 4. **Bump `GameStateVersion()` whenever a component/resource LAYOUT changes.** Live
@@ -406,4 +412,100 @@ engine *around* that ECS.
 - **Jolt physics is included but OFF by default** (`AIMA_WITH_JOLT`) — it's
   general-purpose, not graphics, but heavy; enable it + add `joltphysics` to your
   `vcpkg.json` if you want it.
+```
+
+---
+
+## 9. The hd2d module contract (the batteries-included HD2D renderer)
+
+`hd2d/` is a self-contained, **optional** module that ships a complete HD-2D
+renderer as an implementation of the `aima::Renderer` seam (§4). This is how AIMA
+mass-produces uniform-quality HD2D games: a new game turns the module ON and starts
+on content instead of writing a renderer.
+
+### 9.1 Turning it on
+
+- **CMake option:** `-DAIMA_HD2D_RENDERER=ON` (default OFF). When ON, the framework
+  `add_subdirectory(hd2d)`.
+- **vcpkg feature:** `hd2d-renderer` — pulls the graphics deps: `meshoptimizer`,
+  `imgui` (with `sdl3-binding` + `dx12-binding` on Windows / `sdlgpu3-binding`
+  elsewhere), and on Windows `directxtk12` + `d3d12-memory-allocator`. Add
+  `"hd2d-renderer"` to your project's `vcpkg.json` `features` (or the default-feature
+  list). **Both** the CMake option AND the vcpkg feature are required — one without
+  the other won't build.
+- **Backend variable:** `AIMA_HD2D_BACKEND` = `d3d12` (Windows real GPU) or `sdlgpu`
+  (macOS/Metal, real SDL_GPU device; also the portable fallback). The consumer forces
+  it: `set(AIMA_HD2D_BACKEND "${HD2D_RENDERER}" CACHE STRING "" FORCE)` before
+  `add_subdirectory(aima_framework)`.
+
+### 9.2 Target names
+
+- **`aima::hd2d_renderer`** (STATIC) — the concrete renderer: `renderer_impl.cpp`
+  (`Hd2dRenderer : aima::Renderer`), camera, the backend passes (dx12/ or sdlgpu/),
+  `ui/imgui_layer.cpp`, `assets/gltf_loader.cpp` + `sprite_sheet.cpp`, and
+  `host/stb_impl.cpp`. Link it into BOTH your host exe (for `Hd2dRenderer`) and your
+  game module (for the Gfx/device/pass types + renderer accessors its render systems
+  call). It `PUBLIC`-links `aima::framework`, `imgui::imgui`, `meshoptimizer`.
+- **`aima::hd2d_host_main` is NOT provided** — `main.cpp` stayed in the game repo
+  (it depends on ~6 `game/*` headers, so it's game glue, not framework). Only
+  `host/stb_impl.cpp` moved into the module.
+
+### 9.3 Include-dir contract (why game include lines didn't change)
+
+`aima::hd2d_renderer` publishes `hd2d/` and `hd2d/third_party/` as **PUBLIC** include
+dirs. So every consumer (exe + game module) resolves the historical HD2D include
+lines **unchanged**:
+- `renderer/...`, `ui/...`, `assets/...`, `core/...` → resolve against `hd2d/`.
+- `game_core/...` (paper_anim.h, compass_math.h, dof_math.h, clip_rules.h,
+  components_core.h) → also under `hd2d/`.
+- `<stb_image.h>`, `<stb_image_write.h>`, `<cgltf.h>` → resolve against
+  `hd2d/third_party/`.
+
+Not one HD2D `#include` line had to change in the promotion.
+
+### 9.4 The standard plugin set — `AIMA_HD2D_GAME_CORE_SOURCES` (hot-reload wiring)
+
+The 6 standard plugins (`render/sprite/physics/sound/ui/input_mapper`) live in
+`hd2d/game_core/plugins/*.cpp`, but the module does **NOT** compile them into
+`aima::hd2d_renderer`. They reference game-layer headers (`game/resources.h`,
+`scene_enum.h`, `combat_components.h`, …) via the consumer's include path, so the
+module exports them as an absolute-path list instead:
+
+```cmake
+# in hd2d/CMakeLists.txt
+set(AIMA_HD2D_GAME_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/render_plugin.cpp" …
+    CACHE INTERNAL "…")
+# in the GAME's CMakeLists — the hot-reload dylib absorbs them:
+target_sources(yourgame PRIVATE ${AIMA_HD2D_GAME_CORE_SOURCES})
+```
+
+This keeps them **inside the hot-reloadable game module** (so live code-swap still
+covers the standard plugins) while the framework owns the source files. This is the
+**consumer-resolved `game/` header pattern** — precedent: `game_core/clip_rules.h`
+`#include`s `game/components.h`, which only exists in the consumer. Any promoted file
+that needs a game-layer type follows this: framework owns the file, consumer resolves
+the header, and (for a .cpp) the game module compiles it via `target_sources`.
+
+### 9.5 ⚠️ The `live_scene.h` full-rebuild trap (UNCHANGED — path moved only)
+
+`hd2d/renderer/sdlgpu/live_scene.h` (structs `LiveScene` / `LiveBillboard` /
+`LivePointLight`) is a **game↔renderer SHARED layout**: the exe's device owns the
+`live_` scene and the game's `render_plugin` fills it every frame. If you edit this
+header and hot-reload **only the game module**, the exe still reads
+`meshes/billboards` with the OLD layout → the render breaks ("map flew off screen")
+and `GeometryPass::smooth_normals` dereferences a broken pointer → **SIGSEGV**.
+`GameStateVersion()` does NOT catch this (it's not a World resource). **Editing
+live_scene.h — or any renderer-shared struct — requires a FULL rebuild + restart of
+both the exe and the module, never a game-only hot-swap.** (Only the path changed in
+the promotion — the trap itself is identical to before.)
+
+### 9.6 Asset-dir responsibility split
+
+- **`HD2D_SHADER_DIR`** is defined by the module (`hd2d/shaders`) — the framework
+  knows where its own shaders are.
+- **`HD2D_ASSET_DIR` / `AIMA_ASSET_DIR`** are defined by the **consumer (game)**, not
+  the framework — the module compiles `sprite_sheet.cpp`/`gltf_loader.cpp` which read
+  `AIMA_ASSET_DIR`, but the framework doesn't know the game's asset root. The game's
+  CMake must `target_compile_definitions(aima_hd2d_renderer PUBLIC AIMA_ASSET_DIR=…)`
+  (or define it on the consumer targets) so those loaders resolve paths.
 ```

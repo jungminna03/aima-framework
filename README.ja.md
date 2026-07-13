@@ -2,10 +2,17 @@
 
 🌏 [한국어](README.md) · [日本語](README.ja.md)
 
-**カスタムライブラリエンジン + `aimaちゃん` チャットボット** からなる、ゲーム開発のワークフローそのものを変えるためのフレームワーク。
+**均一なクオリティの HD2D ゲームを量産するためのフレームワーク。** カスタムライブラリ
+エンジン + 内蔵 **HD2D レンダラーモジュール** + `aimaちゃん` チャットボットで、新しい HD2D
+ゲームを「同じ土台・同じルック」で繰り返し量産する。
 [arimu](https://github.com/jungminna03/arimu-framework)（EnTT ベースの ECS）をコアとして包み、
-クロスプラットフォームビルド · ホストループ · ホットリロード · SDL3 プラットフォーム層 · 抽象 **Renderer インターフェース** を
-ひとつのエンジンにまとめ、その上に Telegram チャットボット **aimaちゃん** を乗せている。
+クロスプラットフォームビルド · ホストループ · ホットリロード · SDL3 プラットフォーム層を
+ひとつのエンジンにまとめ、その上に **バッテリー同梱（batteries-included）の HD2D レンダラー**
+（DX12/SDL_GPU · bloom/AgX ポスト · LiveScene · スプライト/ビルボード · ペーパーアニメ ·
+標準プラグインセット）と Telegram チャットボット **aimaちゃん** を乗せている。レンダラーは
+オプション `AIMA_HD2D_RENDERER=ON` + vcpkg フィーチャ `hd2d-renderer` で有効化する。抽象
+**`aima::Renderer` シームはそのまま** — 望めばゲームが自分のレンダラーを持ち込むこともできるが、
+基礎が全部入った HD2D パスがこのフレームワークの目玉だ。
 
 ## なぜ作ったか — ワークフローをひっくり返すため
 
@@ -39,8 +46,13 @@
 
 ドキュメントは「書く作業」ではなく、**ループが残していく副産物** になる。
 
-> **レンダラーは入っていない。** エンジンは何も描かない — 各ゲームが `aima::Renderer` を
-> 自分のグラフィックで実装する（3D、2D、単純な SDL clear、何でも）。だからどんなジャンルでも同じ土台を使う。
+> **HD2D レンダラーが内蔵されている。** `AIMA_HD2D_RENDERER=ON` ならエンジンがそのまま
+> HD-2D 画面を描く — DX12(Windows)/SDL_GPU(macOS Metal) バックエンド、bloom·AgX トーンマップ
+> ポスト、LiveScene シーン提出、スプライト/ビルボード、ペーパーアニメ数学、
+> render/sprite/physics/sound/ui/input 標準プラグインセットまで。だから新しい HD2D ゲームは
+> **レンダラーを書き直さず** コンテンツから始められる。抽象 `aima::Renderer` シームは残って
+> いるので、望めばゲームが自分のグラフィック（2D、単純な SDL clear、別の 3D バックエンド）で
+> 実装して差し込むこともできる — だが均一クオリティへの近道は内蔵 HD2D パスだ。
 
 ## 1フォルダのコピペで新しいゲームを始める
 
@@ -70,13 +82,17 @@ MyGame/                    ← IDE で開く「自分のゲーム」フォルダ
 
 ```
 aima_framework/
-├─ CMakeLists.txt           # エンジンライブラリ（add_subdirectory で取り込む、NO renderer）
+├─ CMakeLists.txt           # エンジンライブラリ（add_subdirectory で取り込む）+ AIMA_HD2D_RENDERER オプション
 ├─ CMakePresets.json        # Windows / macOS / Linux プリセット
-├─ vcpkg.json               # 汎用 deps（グラフィックライブラリなし; Jolt 物理オプション）
+├─ vcpkg.json               # 汎用 deps + フィーチャ hd2d-renderer(imgui/meshopt/directxtk12…)
 ├─ include/aima/            # aima.h · renderer.h（インターフェース）· host.h（ループ + モジュール ABI）
-├─ src/                     # core(log/math/hot_reload/host) · platform(window/input/audio) · assets
+├─ src/                     # core(log/math/hot_reload/host) · platform(window/input/audio) · assets(res_path)
+├─ hd2d/                    # 🎨 内蔵 HD2D レンダラーモジュール（オプション AIMA_HD2D_RENDERER=ON）
+│  ├─ renderer/             #   DX12(dx12/) · SDL_GPU(sdlgpu/, live_scene.h 共有レイアウト) · camera · post
+│  ├─ ui/ · assets/ · shaders/  #   imgui_layer · gltf/sprite ローダー · MSL/HLSL シェーダー
+│  └─ game_core/            #   paper_anim/compass/dof/clip_rules/components_core + 標準プラグイン6種
 ├─ arimu-framework/         # 内蔵 Arimu ECS (+ EnTT) — github.com/jungminna03/arimu-framework
-├─ USAGE_FOR_AI.md          # AI/開発者向け詳細マニュアル（Renderer インターフェース·ABI·ホットリロード）
+├─ USAGE_FOR_AI.md          # AI/開発者向け詳細マニュアル（Renderer インターフェース·ABI·ホットリロード·hd2d モジュール契約）
 └─ tools/
    ├─ setup-mac.command/.sh · setup-windows.ps1 · setup.bat   ← 親をプロジェクトへスキャフォールド
    ├─ issue-token.command/.sh/.bat · issue_token.py           ← トークン発行（親を登録）
@@ -110,12 +126,17 @@ aima_framework/
 
 ## IN vs 除外
 
-**IN:** クロスプラットフォームビルド + 汎用ライブラリ（SDL3, spdlog, efsw, nlohmann_json, tomlplusplus,
-DirectXMath, EnTT via Arimu; Jolt オプション）+ ホストループ + コード·アセットのホットリロード + プラットフォーム層
-（ウィンドウ·入力·ゲームパッド·オーディオ）+ ECS + **Renderer インターフェース** + **aimaちゃん チャットボットワークフロー**。
+**常に IN:** クロスプラットフォームビルド + 汎用ライブラリ（SDL3, spdlog, efsw, nlohmann_json,
+tomlplusplus, DirectXMath, EnTT via Arimu; Jolt オプション）+ ホストループ + コード·アセットの
+ホットリロード + プラットフォーム層（ウィンドウ·入力·ゲームパッド·オーディオ）+ ECS +
+**Renderer インターフェース** + **aimaちゃん チャットボットワークフロー**。
 
-**除外（ゲームが供給）:** 具体的なレンダラー / GPU デバイス / パス / シェーダー、GPU アセットローダー、imgui、
-DX12/SDL_GPU — つまりすべてのグラフィック。
+**オプション IN — HD2D レンダラーモジュール（`AIMA_HD2D_RENDERER=ON` + vcpkg フィーチャ
+`hd2d-renderer`）:** 具体的なレンダラー（DX12 / SDL_GPU バックエンド）· GPU デバイス ·
+フォワード/シャドウ/ポストパス · bloom/AgX シェーダー · gltf/sprite GPU アセットローダー ·
+imgui レイヤー · LiveScene シーン提出 · ペーパーアニメ数学 ·
+render/sprite/physics/sound/ui/input 標準プラグインセット。OFF（デフォルト）にすれば
+フレームワークはレンダラーレスのまま、ゲームが自分の `aima::Renderer` を供給する。
 
 ## setup オプション
 
