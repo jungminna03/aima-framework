@@ -133,3 +133,13 @@ if(MSVC)
 else()
     target_compile_options(aima_framework PRIVATE -Wall -Wextra)
 endif()
+
+# ---------------------------------------------------------------------------
+# HD2D renderer module (opt-in). OFF by default so the framework stays
+# renderer-less / graphics-dep-free for other consumers. When ON, pulls in the
+# DX12 + SDL_GPU renderer stack, imgui, and the gltf/sprite asset glue.
+# ---------------------------------------------------------------------------
+option(AIMA_HD2D_RENDERER "Build the HD2D renderer module (aima::hd2d_renderer)" OFF)
+if(AIMA_HD2D_RENDERER)
+    add_subdirectory(hd2d)
+endif()

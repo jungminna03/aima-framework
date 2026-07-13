@@ -17,6 +17,17 @@
     "physics": {
       "description": "General-purpose Jolt physics (opt-in; enable AIMA_WITH_JOLT in CMake).",
       "dependencies": [ "joltphysics" ]
+    },
+    "hd2d-renderer": {
+      "description": "HD2D renderer stack (DX12 + SDL_GPU + imgui/asset glue). Enable with the vcpkg feature AND -DAIMA_HD2D_RENDERER=ON.",
+      "dependencies": [
+        "meshoptimizer",
+        { "name": "directxtk12", "platform": "windows" },
+        { "name": "d3d12-memory-allocator", "platform": "windows" },
+        { "name": "imgui", "features": ["sdl3-binding"] },
+        { "name": "imgui", "features": ["dx12-binding"], "platform": "windows" },
+        { "name": "imgui", "features": ["sdlgpu3-binding"], "platform": "!windows" }
+      ]
     }
   }
 }
