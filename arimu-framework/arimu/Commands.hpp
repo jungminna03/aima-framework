@@ -50,6 +50,12 @@ public:
         m_deferred->clear();
     }
 
+    // Direct registry access for spawn helpers that create+emplace synchronously
+    // (e.g. hd2d::fx::spawn). ⚠ The returned registry mutates immediately — call ONLY
+    // when the caller is NOT iterating a view of the affected component pools (collect
+    // during iteration, spawn after the loop). Deferred ops still go through AddComponent.
+    entt::registry& registry() { return m_registry; }
+
 private:
     entt::registry& m_registry;
     std::shared_ptr<std::vector<std::function<void()>>> m_deferred;
