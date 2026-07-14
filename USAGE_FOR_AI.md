@@ -509,3 +509,36 @@ the promotion — the trap itself is identical to before.)
   CMake must `target_compile_definitions(aima_hd2d_renderer PUBLIC AIMA_ASSET_DIR=…)`
   (or define it on the consumer targets) so those loaders resolve paths.
 ```
+
+### 9.7 The fx module (unified visual-effect spawn system, 2026-07-14)
+
+`hd2d/game_core/fx_defs.h` + `fx.h` + `plugins/fx_plugin.cpp` ship a small
+data-driven VFX layer on top of the paper-sprite substrate: a single-row square-frame
+PNG + one `EffectDef` table row (id/sheet/frames/fps/loop + motion/tint curves) is
+the whole authoring surface — adding an effect never touches code.
+
+- **Files**: `fx_defs.h` (the `EffectDef` table, `kEffectDefs[]`, `find_effect_def`),
+  `fx.h` (the `EffectFx` component + `hd2d::fx::spawn`/`spawn_on` declarations),
+  `plugins/fx_plugin.cpp` (`FxSystem` — advances `EffectFx.t`, drives frame index +
+  motion/tint curves onto `BillboardSprite`, despawns finished one-shots).
+- **Spawn API**: `hd2d::fx::spawn(registry, id, pos)` creates a world-fixed
+  `Transform`+`BillboardSprite`+`EffectFx` entity; `hd2d::fx::spawn_on(registry, id,
+  target)` follows a target `Transform` (dies with the target). Both are plain
+  `registry.create()`/`emplace()` calls — call them from a context that is **not**
+  mid-view-iteration. An unknown `id` logs `[fx] unknown` and returns `entt::null`
+  (no-op), never throws.
+- **`FxSystem` ordering contract**: it must run in `Arimu::Phase::Logic` **after**
+  the game-side `CombatTintSystem`. `CombatTintSystem` resets every
+  `BillboardSprite.tint` to a combat-flash baseline each frame; `FxSystem` then
+  overwrites that channel with its own tint curve. If the order flips, FX glow gets
+  clobbered back to baseline every frame and never renders. `AddSystem` call order
+  in the plugin registration is the only thing enforcing this — there's no
+  compile-time guard.
+- **Why consumers reach for `Commands::registry()`**: game-side spawn call sites
+  (e.g. combat hit/slash wiring) run inside `.each()` view iteration, where calling
+  `registry.create()` directly would invalidate the iterator. The fix is the same
+  deferred-spawn pattern used elsewhere in the ABI: collect spawn positions into a
+  local vector during the `.each()`, then loop over that vector calling
+  `hd2d::fx::spawn(cmd.registry(), id, pos)` **after** the view iteration ends —
+  `cmd.registry()` is the accessor that hands back the live `entt::registry&` for
+  that deferred call.
