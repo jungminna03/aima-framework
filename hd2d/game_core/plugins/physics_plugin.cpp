@@ -432,6 +432,12 @@ void CharacterPhysicsSystem(Arimu::Query<Character, Transform> characters,
                 if (!sheet.valid) continue;  // sheet still loading: wait a frame
                 total = static_cast<float>(sheet.frame_px) / rs->pixels_per_unit;
             }
+            // 빌보드 스케일 반영(2026-07-14, 사용자 "벽에 낑기고 무조건 합쳐지려고"):
+            // 재앙 보스(스폰 Transform.scale 1.1~1.8)의 캡슐이 frame_px만 보고 1m로
+            // 고정돼, 큰 스프라이트가 서로/벽에 깊이 파고들었다(충돌은 정상인데
+            // 그림만 관통 — 밀집 시 한 덩어리처럼 보임). 렌더 높이 = frame×scale이므로
+            // 충돌 높이도 같이 키운다. 기존 캐스트는 전부 scale=1이라 무영향.
+            if (tf.scale > 0.01f) total *= tf.scale;
             // Rescue a buried spawn BEFORE the capsule exists: a character placed
             // inside the static world would otherwise freeze there forever.
             {
