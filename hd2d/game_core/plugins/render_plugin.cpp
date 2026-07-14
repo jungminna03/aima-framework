@@ -33,6 +33,14 @@ void set_time_of_day(float t01) { g_tod_set = t01 - std::floor(t01); }
 // GameTimeSystem(시간의 단일 권위)이 소비: 요청된 점프 시각을 반환(없으면 -1)하고 리셋.
 float consume_time_of_day_jump() { const float j = g_tod_set; g_tod_set = -1.0f; return j; }
 
+// F2 일차 점프 채널(2026-07-14, 사용자 "날짜 변경하는 기능 F2"): 하루 안 시각이 아니라
+// **날짜(일차)를 통째로** ±N일 점프시키는 요청 — 재앙 일차(7/21/30) 인터랙티브 검증용.
+// 시각 채널과 같은 관용구: 생산자(F2 버튼/테스트)는 request만, GameTimeSystem이
+// accumulated_seconds += N×day_length로 소비(time_in_day 보존, 0 미만 클램프).
+int g_day_jump = 0;
+void request_day_jump(int days) { g_day_jump += days; }
+int consume_day_jump() { const int j = g_day_jump; g_day_jump = 0; return j; }
+
 // 시각(시계 시) 키프레임 워커: rows = {hour, r, g, b} 시각 오름차순. 세그먼트 안은
 // smoothstep 보간, 마지막→첫 행은 자정을 감아 도는 랩 세그먼트(양끝이 같은 색이면 = 홀드).
 // 구 등분(t*4) 커프레임과 달리 각 무드에 임의 시각·홀드 구간을 줄 수 있다.

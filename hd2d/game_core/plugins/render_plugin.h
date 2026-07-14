@@ -34,5 +34,10 @@ void set_time_of_day(float t01);
 // 리셋한다. 게임 시계(GameTime)가 시간의 단일 권위이므로 비주얼 자체 전진은 폐지됐고,
 // F2 시간 바 등의 점프는 GameTimeSystem이 이 채널로 흡수해 accumulated_seconds에 반영한다.
 float consume_time_of_day_jump();
+// F2 일차 점프(2026-07-14): 날짜(일차)를 ±N일 통째로 요청/소비 — 시각 채널과 같은
+// 관용구(생산자 = F2 버튼/테스트 훅, 소비자 = GameTimeSystem: acc += N×day_length,
+// time_in_day 보존 + 0 미만 클램프). 재앙 일차(7/21/30) 인터랙티브 검증용.
+void request_day_jump(int days);
+int consume_day_jump();
 
 } // namespace hd2d
