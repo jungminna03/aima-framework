@@ -119,4 +119,5 @@ set(AIMA_HD2D_GAME_CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/sound_plugin.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/ui_plugin.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/input_mapper_plugin.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/game_core/plugins/fx_plugin.cpp"
     CACHE INTERNAL "HD2D 표준 플러그인 세트(승격) — hd2d_game 이 소스로 흡수")
