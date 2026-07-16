@@ -37,6 +37,7 @@
 #include <string>
 
 struct SDL_Window;
+union SDL_Event;
 
 namespace aima {
 
@@ -64,6 +65,17 @@ public:
     // clears to `clear`. Return an opaque handle the game's Render-phase systems
     // record their draws against (or a sentinel / nullptr if the backend has no
     // such object). Called once per frame, before App::Tick's Render phase.
+    // Forward one SDL event to the backend's UI layer (Dear ImGui). The host
+    // calls this for EVERY polled event, before its own handling — 2026-07-15:
+    // 이 배선이 aima 마이그레이션 때 빠져 ImGui가 마우스 이벤트를 못 받아
+    // "F1 패널이 클릭이 안 되는" 버그의 근원이었다. Default no-op.
+    virtual void process_event(const SDL_Event& /*event*/) {}
+
+    // True while the backend's UI layer (ImGui) is using the mouse — the host
+    // skips filling game mouse input so panel clicks don't leak into gameplay
+    // (구 main.cpp의 io.WantCaptureMouse 게이팅 복원, 2026-07-15).
+    virtual bool wants_mouse() const { return false; }
+
     virtual FrameHandle begin_frame(const ClearColor& clear) = 0;
 
     // End the frame: finish the render pass, submit, and present. Called once per

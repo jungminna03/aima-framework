@@ -76,6 +76,11 @@ public:
     // and the game's DX12 render systems early-return on a null command list).
     aima::FrameHandle begin_frame(const aima::ClearColor& clear) override;
 
+    // 호스트가 폴링한 SDL 이벤트를 ImGui 백엔드로 전달(2026-07-15 — 빠져 있던 배선:
+    // 이게 없으면 ImGui가 마우스 위치/버튼을 못 받아 디버그 패널 클릭 불능).
+    void process_event(const SDL_Event& event) override;
+    bool wants_mouse() const override;   // ImGui io.WantCaptureMouse(패널 클릭이 게임에 안 새게)
+
     void end_frame(bool vsync = true) override;
     void resize(int width, int height) override;
 

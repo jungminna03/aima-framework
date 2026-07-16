@@ -51,6 +51,14 @@ public:
     // draw() itself is PSO-agnostic (it only sets constants + buffers).
     void set_translucent(ID3D12GraphicsCommandList* cmd, bool on);
 
+    // Two-sided(cull NONE) opaque 변형 — 빌보드 스프라이트/double_sided 재질용.
+    // (기본 opaque PSO는 2026-07-15부터 뒷면 컬링.)
+    void set_two_sided(ID3D12GraphicsCommandList* cmd, bool on);
+
+    // Bind the skybox PSO (depth test+write OFF — draw right after scene_begin,
+    // everything else overdraws it) or restore the opaque PSO.
+    void set_sky(ID3D12GraphicsCommandList* cmd, bool on);
+
 private:
     template <class T> using ComPtr = Microsoft::WRL::ComPtr<T>;
 
@@ -64,6 +72,8 @@ private:
     ComPtr<ID3D12RootSignature> root_sig_;
     ComPtr<ID3D12PipelineState> pso_;
     ComPtr<ID3D12PipelineState> pso_blend_;   // translucent occluder-fade variant
+    ComPtr<ID3D12PipelineState> pso_sky_;     // 3D skybox: depth off variant
+    ComPtr<ID3D12PipelineState> pso_two_sided_;   // cull NONE opaque (빌보드/양면 재질)
     ComPtr<ID3DBlob> vs_;
     ComPtr<ID3DBlob> ps_;
 

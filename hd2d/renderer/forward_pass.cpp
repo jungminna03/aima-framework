@@ -176,10 +176,12 @@ bool ForwardPass::build_pso() {
     pd.SampleDesc.Count = 1;
     pd.SampleMask = UINT_MAX;
 
-    // Rasterizer: cull none (robust against the glTF->DX winding flip + double-
-    // sided billboards). Tighten to back-cull later once winding is verified.
+    // Rasterizer(2026-07-15 사용자 "안쪽 면은 렌더링 안되게"): 불투명 메시 = 뒷면 컬링
+    // (닫힌 솔리드의 안쪽/뒷면 픽셀·래스터 비용 제거 — 로더가 winding을 이미 정정).
+    // 양면이 필요한 것들(빌보드 스프라이트, double_sided 재질=천 배너)은
+    // pso_two_sided_ 변형으로 그린다(set_two_sided). 스카이/페이드는 아래 변형 참조.
     pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    pd.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
     pd.RasterizerState.DepthClipEnable = TRUE;
 
     // Opaque blend; transparency handled by alpha-test (discard) in the shader.
@@ -199,7 +201,19 @@ bool ForwardPass::build_pso() {
     // over-blend, depth-test LESS_EQUAL so the occluder still hides behind nearer
     // geometry, but NO depth write (it draws after the opaque scene + the player
     // billboard, blending over them without leaving depth that breaks later draws).
+    // Two-sided variant (opaque와 동일, cull만 NONE): 빌보드 스프라이트 + double_sided
+    // 재질(천 배너 등 얇은 면 — 뒤에서도 보여야 함).
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC td = pd;
+    td.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    ComPtr<ID3D12PipelineState> pso_two_sided;
+    if (FAILED(dev_->device()->CreateGraphicsPipelineState(&td, IID_PPV_ARGS(&pso_two_sided)))) {
+        HD2D_ERROR("create two-sided PSO failed (keeping previous)");
+        return false;
+    }
+
     D3D12_GRAPHICS_PIPELINE_STATE_DESC bd = pd;
+    // 페이드 벽은 안팎 어느 쪽서든 반투명으로 보여야 자연스럽다 — cull 유지 안 함.
+    bd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     D3D12_RENDER_TARGET_BLEND_DESC& rt0 = bd.BlendState.RenderTarget[0];
     rt0.BlendEnable = TRUE;
     rt0.SrcBlend = D3D12_BLEND_SRC_ALPHA;
@@ -217,13 +231,36 @@ bool ForwardPass::build_pso() {
         return false;
     }
 
+    // Skybox variant: opaque blend, depth fully OFF (the sky draws first each
+    // frame right after the clear; the scene overdraws it by depth-writing later).
+    // 스카이돔은 **안쪽에서** 본다 — 뒷면 컬링이면 하늘이 통째로 사라지므로 cull NONE.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC sd = pd;
+    sd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    sd.DepthStencilState.DepthEnable = FALSE;
+    sd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    ComPtr<ID3D12PipelineState> pso_sky;
+    if (FAILED(dev_->device()->CreateGraphicsPipelineState(&sd, IID_PPV_ARGS(&pso_sky)))) {
+        HD2D_ERROR("create sky PSO failed (keeping previous)");
+        return false;
+    }
+
     pso_ = pso;
     pso_blend_ = pso_blend;
+    pso_sky_ = pso_sky;
+    pso_two_sided_ = pso_two_sided;
     return true;
 }
 
 void ForwardPass::set_translucent(ID3D12GraphicsCommandList* cmd, bool on) {
     cmd->SetPipelineState(on ? pso_blend_.Get() : pso_.Get());
+}
+
+void ForwardPass::set_two_sided(ID3D12GraphicsCommandList* cmd, bool on) {
+    cmd->SetPipelineState(on ? pso_two_sided_.Get() : pso_.Get());
+}
+
+void ForwardPass::set_sky(ID3D12GraphicsCommandList* cmd, bool on) {
+    cmd->SetPipelineState(on ? pso_sky_.Get() : pso_.Get());
 }
 
 void* ForwardPass::alloc_constants(size_t size, D3D12_GPU_VIRTUAL_ADDRESS* out_va) {
@@ -276,6 +313,7 @@ void ForwardPass::shutdown() {
     }
     pso_.Reset();
     pso_blend_.Reset();
+    pso_sky_.Reset();
     root_sig_.Reset();
     vs_.Reset();
     ps_.Reset();

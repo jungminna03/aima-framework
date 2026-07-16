@@ -110,6 +110,14 @@ void Hd2dRenderer::imgui_bind_args(void*& ctx, void*& alloc, void*& free, void*&
 // returns nullptr there, and the game's DX12-coupled render systems early-return
 // on a null command list — the SDL_GPU clear/scene happens inside the device).
 // ----------------------------------------------------------------------------
+void Hd2dRenderer::process_event(const SDL_Event& event) {
+    imgui_.process_event(event);
+}
+
+bool Hd2dRenderer::wants_mouse() const {
+    return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse;
+}
+
 aima::FrameHandle Hd2dRenderer::begin_frame(const aima::ClearColor& clear) {
     // ImGui NewFrame BEFORE the device frame, faithful to the old main loop: the
     // game's HUD/UI systems build draw data during App::Tick (between begin/end),
@@ -198,6 +206,11 @@ void FrameRenderer::scene_set_translucent(bool on) {
     if (cmd_ && fwd_) fwd_->set_translucent(cmd_, on);
 }
 
+void FrameRenderer::scene_set_sky(bool on) {
+    sky_on_ = on;
+    if (cmd_ && fwd_) fwd_->set_sky(cmd_, on);
+}
+
 void FrameRenderer::scene_draw_mesh(rhi::GpuMesh mesh, const math::Matrix& model,
                                     const DrawMaterial& mat, float alpha) {
     if (!cmd_ || !fwd_ || !table_) return;
@@ -241,7 +254,12 @@ void FrameRenderer::scene_draw_mesh(rhi::GpuMesh mesh, const math::Matrix& model
         dc.base_color[3] *= alpha;
         dc.alpha_cutoff = 0.0f;
     }
+    // flags bit 16 = 양면 재질(double_sided — 천 배너 등): 기본 opaque PSO가 뒷면
+    // 컬링이라(2026-07-15) cull NONE 변형으로 브래킷. 셰이더는 이 비트를 안 본다.
+    const bool two_sided = (dc.flags & 16u) != 0 && alpha >= 1.0f && !sky_on_;
+    if (two_sided) fwd_->set_two_sided(cmd_, true);
     fwd_->draw(cmd_, dc, srvs, sm.vbv, sm.ibv, sm.index_count);
+    if (two_sided) fwd_->set_two_sided(cmd_, false);
 }
 
 void FrameRenderer::scene_begin(const FrameConstants& fc, const float sky[4],
@@ -287,7 +305,10 @@ void FrameRenderer::scene_draw_sprite(rhi::GpuMesh quad, const math::Matrix& mod
     if (sheet.id) if (const GpuTexture* t = table_->resolve(sheet)) if (t->resource) srvs.base = t->srv_gpu;
     srvs.mr = srvs.emissive = white;
     srvs.normal = fbn ? fbn->srv_gpu : D3D12_GPU_DESCRIPTOR_HANDLE{};
+    // 빌보드는 양면(카메라를 향해 회전 + U 미러 플립) — 뒷면 컬링 PSO에서 제외.
+    fwd_->set_two_sided(cmd_, true);
     fwd_->draw(cmd_, dc, srvs, sm->vbv, sm->ibv, sm->index_count);
+    fwd_->set_two_sided(cmd_, false);
 }
 
 bool FrameRenderer::shadow_ready() const {

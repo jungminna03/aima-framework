@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <string>
+#include <unordered_map>
 
 namespace hd2d {
 
@@ -142,6 +144,111 @@ Float3 light_dir_engine(const math::Mat4x4& m) {
 //  g_tod를 '읽기만' 한다. HD2D_DAYLEN/HD2D_TIMEOFDAY/F4 스크럽은 GameTimeSystem으로 이관,
 //  F2 시간 바 점프는 set_time_of_day → consume_time_of_day_jump로 GameTime이 흡수한다.)
 
+// ---------------------------------------------------------------------------
+// 프러스텀 컬링(2026-07-15 사용자 "화면 밖은 렌더링 안 해서 드로우콜 줄이자"):
+// 씬/그림자/페이드/빌보드 4개 드로우 루프가 맵 전 노드(medieval village_c = 2088개)를
+// 매 프레임 무조건 그리던 것을, 뷰(또는 태양 ortho) 프러스텀 밖이면 스킵한다.
+// 로컬 AABB는 엔티티별 1회 계산-캐시(맵 스왑/프림 교체 시 무효화), 매 프레임은
+// 8코너 변환 + 6평면 테스트뿐. HD2D_NOCULL=1로 끄고(진단), HD2D_CULLSTATS=1이
+// 300프레임마다 드로우/컬 카운트를 찍는다.
+// ---------------------------------------------------------------------------
+struct CullPlanes { float p[6][4]; };
+
+// row-vector 규약(clip = p·VP, 이 코드베이스의 m[3][0..2]=이동과 일치): 평면 = VP 열 조합.
+CullPlanes cull_planes_from(const math::Mat4x4& vp) {
+    CullPlanes out{};
+    auto set = [&](int i, float a, float b, float c, float d) {
+        const float l = std::sqrt(a * a + b * b + c * c);
+        const float inv = l > 1e-9f ? 1.0f / l : 0.0f;
+        out.p[i][0] = a * inv; out.p[i][1] = b * inv;
+        out.p[i][2] = c * inv; out.p[i][3] = d * inv;
+    };
+    const auto& m = vp.m;
+    set(0, m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0]);   // left
+    set(1, m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0]);   // right
+    set(2, m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1]);   // bottom
+    set(3, m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1]);   // top
+    set(4, m[0][2], m[1][2], m[2][2], m[3][2]);                                            // near (z>=0)
+    set(5, m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2]);   // far
+    return out;
+}
+
+bool sphere_visible(const CullPlanes& f, const Float3& c, float r) {
+    for (int i = 0; i < 6; ++i) {
+        const float* pl = f.p[i];
+        if (c.x * pl[0] + c.y * pl[1] + c.z * pl[2] + pl[3] < -r) return false;
+    }
+    return true;
+}
+
+bool aabb_visible(const CullPlanes& f, const Float3& mn, const Float3& mx) {
+    const float cx = (mn.x + mx.x) * 0.5f, cy = (mn.y + mx.y) * 0.5f, cz = (mn.z + mx.z) * 0.5f;
+    const float ex = (mx.x - mn.x) * 0.5f, ey = (mx.y - mn.y) * 0.5f, ez = (mx.z - mn.z) * 0.5f;
+    for (int i = 0; i < 6; ++i) {
+        const float* pl = f.p[i];
+        const float r = ex * std::fabs(pl[0]) + ey * std::fabs(pl[1]) + ez * std::fabs(pl[2]);
+        if (cx * pl[0] + cy * pl[1] + cz * pl[2] + pl[3] < -r) return false;
+    }
+    return true;
+}
+
+bool cull_enabled() {
+    static const bool off = sys::env("HD2D_NOCULL") != nullptr;
+    return !off;
+}
+
+// 엔티티별 로컬(모델공간) AABB 캐시. key=prims 벡터 데이터 포인터 — 엔티티 슬롯 재활용/
+// 프롭 교체 시 자동 무효화, 맵 스왑 시 전체 클리어.
+struct LocalBounds { const void* key; Float3 mn, mx; };
+const LocalBounds& mesh_local_bounds(entt::entity e, const MeshRenderer& mr,
+                                     const std::string& map_path) {
+    static std::string s_map;
+    static std::unordered_map<uint32_t, LocalBounds> s_cache;
+    if (s_map != map_path) { s_cache.clear(); s_map = map_path; }
+    LocalBounds& lb = s_cache[static_cast<uint32_t>(e)];
+    if (lb.key != static_cast<const void*>(mr.prims.data())) {
+        lb.key = mr.prims.data();
+        Float3 mn{1e30f, 1e30f, 1e30f}, mx{-1e30f, -1e30f, -1e30f};
+        for (const LoadedPrimitive& prim : mr.prims)
+            for (const Float3& p : prim.cpu.positions) {
+                mn.x = std::min(mn.x, p.x); mn.y = std::min(mn.y, p.y); mn.z = std::min(mn.z, p.z);
+                mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
+            }
+        if (mn.x > mx.x) { mn = Float3{0, 0, 0}; mx = Float3{0, 0, 0}; }
+        lb.mn = mn; lb.mx = mx;
+    }
+    return lb;
+}
+
+// 로컬 AABB 8코너를 월드로 변환해 프러스텀 테스트(보수적 — 월드 AABB로 재합성).
+bool mesh_visible(const CullPlanes& f, entt::entity e, const MeshRenderer& mr,
+                  const math::Mat4x4& w, const std::string& map_path) {
+    const LocalBounds& lb = mesh_local_bounds(e, mr, map_path);
+    Float3 mn{1e30f, 1e30f, 1e30f}, mx{-1e30f, -1e30f, -1e30f};
+    for (int i = 0; i < 8; ++i) {
+        const float x = (i & 1) ? lb.mx.x : lb.mn.x;
+        const float y = (i & 2) ? lb.mx.y : lb.mn.y;
+        const float z = (i & 4) ? lb.mx.z : lb.mn.z;
+        const float wx = x * w.m[0][0] + y * w.m[1][0] + z * w.m[2][0] + w.m[3][0];
+        const float wy = x * w.m[0][1] + y * w.m[1][1] + z * w.m[2][1] + w.m[3][1];
+        const float wz = x * w.m[0][2] + y * w.m[1][2] + z * w.m[2][2] + w.m[3][2];
+        mn.x = std::min(mn.x, wx); mn.y = std::min(mn.y, wy); mn.z = std::min(mn.z, wz);
+        mx.x = std::max(mx.x, wx); mx.y = std::max(mx.y, wy); mx.z = std::max(mx.z, wz);
+    }
+    return aabb_visible(f, mn, mx);
+}
+
+// HD2D_CULLSTATS: 300프레임마다 스킵 효율 로그(패스별 그린/컬 수).
+struct CullStats { int drawn = 0, culled = 0; };
+void cull_stats_log(const char* pass, CullStats& s) {
+    static const bool on = sys::env("HD2D_CULLSTATS") != nullptr;
+    if (!on) return;
+    static std::unordered_map<std::string, int> s_frames;
+    int& f = s_frames[pass];
+    if (++f % 300 == 0)
+        HD2D_INFO("[cull] {} drawn={} culled={}", pass, s.drawn, s.culled);
+}
+
 // Render the sun shadow map: pick the first directional map light, fit an
 // orthographic frustum around the map bounds, draw every caster (meshes with
 // their full material alpha state; billboards as alpha-tested cutouts rotated
@@ -208,6 +315,11 @@ void ShadowPassSystem(Arimu::Query<MapLight, WorldMatrix> lights,
 
     gfx->frame->shadow_begin(g_sun_shadow.view_proj);
 
+    // 태양 ortho 프러스텀 컬링: 그림자 프러스텀이 플레이어 반경 30m로 좁혀져 있어
+    // (밴딩 수정) 맵 대부분의 캐스터를 통째로 스킵할 수 있다.
+    const CullPlanes sun_planes = cull_planes_from(g_sun_shadow.view_proj);
+    CullStats sstat;
+
     // Meshes (nocast extras opt out; MASK materials alpha-test their cutout).
     for (auto [e, tf, mr] : meshes.each()) {
         if (extras.Contains(e) && extras.Get<NodeExtras>(e).nocast) continue;
@@ -217,6 +329,10 @@ void ShadowPassSystem(Arimu::Query<MapLight, WorldMatrix> lights,
         } else {
             math::store(model, model_matrix(tf.scale, tf.yaw_deg, tf.position));
         }
+        if (cull_enabled() && !mesh_visible(sun_planes, e, mr, model, map->glb_path)) {
+            ++sstat.culled; continue;
+        }
+        ++sstat.drawn;
         for (const LoadedPrimitive& prim : mr.prims) {
             float cutoff = 0.0f;
             rhi::GpuTexture base{};   // {0} → FrameRenderer가 fallback white로 해석
@@ -239,6 +355,12 @@ void ShadowPassSystem(Arimu::Query<MapLight, WorldMatrix> lights,
     for (auto [e, tf, bb] : sprites.each()) {
         if (!bb.sheet.valid) continue;
         const float world_h = static_cast<float>(bb.sheet.frame_px) / rs->pixels_per_unit;
+        if (cull_enabled() &&
+            !sphere_visible(sun_planes, Float3{tf.position.x, tf.position.y + world_h * 0.5f,
+                                               tf.position.z}, world_h)) {
+            ++sstat.culled; continue;
+        }
+        ++sstat.drawn;
         math::Mat4x4 model;
         math::store(model, model_matrix(world_h, yaw_to_light, tf.position));
         float uv_off[2] = {bb.cur_frame / static_cast<float>(bb.sheet.frame_count),
@@ -247,6 +369,7 @@ void ShadowPassSystem(Arimu::Query<MapLight, WorldMatrix> lights,
         gfx->frame->shadow_draw(bbmesh->quad, model, 0.5f, bb.sheet.texture, uv_off, uv_scale);
     }
 
+    cull_stats_log("shadow", sstat);
     gfx->frame->shadow_end();
 }
 
@@ -402,8 +525,12 @@ math::Matrix mesh_world_matrix(entt::entity e, const Transform& tf,
 // alpha < 1 = camera-occlusion fade (the CALLER brackets with scene_set_translucent).
 // Backend-neutral: builds a DrawMaterial (rhi handles + PBR factors) and hands each
 // primitive to the FrameRenderer, which resolves handles + records the GPU draw.
+// two_sided: 호출측이 NodeExtras.cloth로 결정(2026-07-15) — 재질 doubleSided 플래그는
+// 생성기들이 전 재질에 무차별로 켜서(medieval 25/26, overworld 16/16) 뒷면 컬링을
+// 통째로 무효화했다. 실제로 양면이 필요한 건 천(배너) 같은 얇은 시뮬 메시뿐.
 void draw_mesh_prims(const Gfx& gfx, const MapScene& map,
-                     const math::Matrix& m, const MeshRenderer& mr, float alpha) {
+                     const math::Matrix& m, const MeshRenderer& mr, float alpha,
+                     bool two_sided = false) {
     for (const LoadedPrimitive& prim : mr.prims) {
         DrawMaterial dm{};
         const LoadedMaterial* mat =
@@ -429,8 +556,58 @@ void draw_mesh_prims(const Gfx& gfx, const MapScene& map,
             dm.normal = tex(mat->tex_normal);
             dm.emissive = tex(mat->tex_emissive);
         }
+        if (two_sided) dm.flags |= 16;   // cull NONE PSO 선택(renderer_impl 비트16)
         gfx.frame->scene_draw_mesh(prim.mesh, m, dm, alpha);
     }
+}
+
+// 3D 스카이박스(스펙 2026-07-15): BeginScenePass 직후, 모든 드로우보다 먼저.
+// depth OFF PSO + unlit(flags bit8) — 이후 씬이 하늘을 덮는다. 카메라를 63/64만큼
+// 따라가(이동의 1/64만 시차) 회전은 뷰 행렬이 처리. 색 = 에셋(정오 기준) ×
+// day_night_sky/정오 정규화 틴트(밤엔 어둡게 — 낮밤 단서 유지).
+void SkyRenderSystem(Arimu::Res<SkyScene> sky,
+                     Arimu::Res<OrbitCamera> cam,
+                     Arimu::Res<Gfx> gfx) {
+    if (!sky->valid || !gfx->frame || !gfx->frame->ready()) return;
+
+    float dn[3]; day_night_sky(g_tod, dn);
+    static const float kNoon[3] = {0.35f, 0.56f, 0.90f};   // day_night_sky 정오 키
+    float tint[3];
+    for (int c = 0; c < 3; ++c) tint[c] = dn[c] / kNoon[c];
+
+    const Float3 cp = cam->position();
+    const float k = 1.0f - 1.0f / 64.0f;   // 패럴랙스: 이동의 1/64만 보임
+    const math::Matrix follow = math::translation(cp.x * k, cp.y * k, cp.z * k);
+
+    gfx->frame->scene_set_sky(true);
+    uint32_t drawn = 0;
+    for (const SkyNode& n : sky->nodes) {
+        const math::Matrix m = math::load(n.world) * follow;
+        for (const LoadedPrimitive& prim : n.prims) {
+            DrawMaterial dm{};
+            dm.has_material = true;
+            dm.flags = 8;   // unlit
+            const LoadedMaterial* mat =
+                (prim.material >= 0 && prim.material < (int)sky->materials.size())
+                    ? &sky->materials[prim.material] : nullptr;
+            for (int c = 0; c < 4; ++c) dm.base_color[c] = mat ? mat->base_color[c] : 1.0f;
+            for (int c = 0; c < 3; ++c) dm.base_color[c] *= tint[c];
+            if (mat) {
+                dm.flags |= (uint32_t)mat->sampler_flags & 3u;   // nearest/clamp만 승계
+                for (int c = 0; c < 3; ++c)
+                    dm.emissive_factor[c] = mat->emissive[c] * mat->emissive_strength;
+                if (mat->tex_base >= 0 && mat->tex_base < (int)sky->textures.size())
+                    dm.base = sky->textures[mat->tex_base];
+                if (mat->tex_emissive >= 0 && mat->tex_emissive < (int)sky->textures.size())
+                    dm.emissive = sky->textures[mat->tex_emissive];
+            }
+            gfx->frame->scene_draw_mesh(prim.mesh, m, dm, 1.0f);
+            ++drawn;
+        }
+    }
+    gfx->frame->scene_set_sky(false);
+    static bool logged = false;
+    if (!logged) { logged = true; HD2D_INFO("[sky] draw n={}", drawn); }
 }
 
 // Draw the low-poly glTF meshes with their full PBR material set. Meshes currently
@@ -439,16 +616,31 @@ void draw_mesh_prims(const Gfx& gfx, const MapScene& map,
 void MeshRenderSystem(Arimu::Query<Transform, MeshRenderer> meshes,
                       Arimu::Query<WorldMatrix> world_mats,
                       Arimu::Query<Rotation3D> rotations,
+                      Arimu::Query<NodeExtras> extras,
                       Arimu::Res<MapScene> map,
+                      Arimu::Res<OrbitCamera> cam,
                       Arimu::Res<RenderContext> rc,
                       Arimu::Res<Gfx> gfx,
                       Arimu::Res<OcclusionState> occ) {
     if (!gfx->frame || !gfx->frame->ready()) return;
+    // 카메라 프러스텀 컬링(2026-07-15): 화면 밖 노드는 드로우콜 자체를 스킵.
+    math::Mat4x4 vpm;
+    math::store(vpm, math::mul(cam->view(), cam->proj(rc->aspect)));
+    const CullPlanes planes = cull_planes_from(vpm);
+    CullStats stat;
     for (auto [e, tf, mr] : meshes.each()) {
         if (occ->at(static_cast<uint32_t>(e)) < 0.999f) continue;   // faded -> other pass
         const math::Matrix m = mesh_world_matrix(e, tf, world_mats, rotations);
-        draw_mesh_prims(*gfx, *map, m, mr, 1.0f);
+        if (cull_enabled()) {
+            math::Mat4x4 w;
+            math::store(w, m);
+            if (!mesh_visible(planes, e, mr, w, map->glb_path)) { ++stat.culled; continue; }
+        }
+        ++stat.drawn;
+        const bool cloth = extras.Contains(e) && extras.Get<NodeExtras>(e).cloth;
+        draw_mesh_prims(*gfx, *map, m, mr, 1.0f, cloth);
     }
+    cull_stats_log("scene", stat);
 }
 
 // Draw the billboard pixel sprites through the same pass. The quad faces the
@@ -463,8 +655,19 @@ void BillboardRenderSystem(Arimu::Query<Transform, BillboardSprite> sprites,
                            Arimu::Res<BillboardMesh> mesh) {
     if (!gfx->frame || !gfx->frame->ready()) return;
     const Float3 cp = cam->position();
+    math::Mat4x4 vpm;
+    math::store(vpm, math::mul(cam->view(), cam->proj(rc->aspect)));
+    const CullPlanes planes = cull_planes_from(vpm);
     for (auto [e, tf, bb] : sprites.each()) {
         if (!bb.sheet.valid) continue;
+        {   // 화면 밖 빌보드 컬링(높이의 구 근사 — 페이퍼 오프셋/스쿼시 여유 포함)
+            const float rr = static_cast<float>(bb.sheet.frame_px) / rs->pixels_per_unit *
+                             std::max(1.0f, tf.scale) * 1.2f;
+            if (cull_enabled() &&
+                !sphere_visible(planes, Float3{tf.position.x, tf.position.y + rr * 0.5f,
+                                               tf.position.z}, rr))
+                continue;
+        }
 
         const float dx_ = cp.x - tf.position.x;
         const float dz_ = cp.z - tf.position.z;
@@ -476,8 +679,14 @@ void BillboardRenderSystem(Arimu::Query<Transform, BillboardSprite> sprites,
         const float world_h = static_cast<float>(bb.sheet.frame_px) / rs->pixels_per_unit *
                               (tf.scale > 0.0f ? tf.scale : 1.0f);
         const Float3 ppos = {tf.position.x + bb.off_x, tf.position.y + bb.bob_y,
-                             tf.position.z + bb.off_z};   // 페이퍼 홉/런지(스쿼시는 SDL_GPU 경로만)
-        const math::Matrix m = model_matrix(world_h, yaw_to_cam, ppos);
+                             tf.position.z + bb.off_z};
+        // 페이퍼 스쿼시&스트레치(2026-07-16): SDL_GPU 경로(geometry_pass :874)와 동일하게
+        // 비균일 스케일(발밑 y=0 고정) — 이게 빠져 있어 Windows(DX12)에서만 사망
+        // 납작/가라앉기 연출이 안 보였다.
+        const math::Matrix m = math::mul(
+            math::mul(math::scaling(world_h * bb.scale_x, world_h * bb.scale_y, world_h),
+                      math::rotation_y(yaw_to_cam / kRad2Deg)),
+            math::translation(ppos.x, ppos.y, ppos.z));
 
         // Combat tint: written each frame by the game-side CombatTintSystem
         // (피격 플래시 / 사망 암전 / 파이어볼 HDR 발광 — 승격 역전으로 전투 상태를
@@ -544,15 +753,24 @@ void OccluderFadeRenderSystem(Arimu::Query<Transform, MeshRenderer> meshes,
                               Arimu::Query<WorldMatrix> world_mats,
                               Arimu::Query<Rotation3D> rotations,
                               Arimu::Res<MapScene> map,
+                              Arimu::Res<OrbitCamera> cam,
                               Arimu::Res<RenderContext> rc,
                               Arimu::Res<Gfx> gfx,
                               Arimu::Res<OcclusionState> occ) {
     if (!gfx->frame || !gfx->frame->ready() || occ->alpha.empty()) return;
+    math::Mat4x4 vpm;
+    math::store(vpm, math::mul(cam->view(), cam->proj(rc->aspect)));
+    const CullPlanes planes = cull_planes_from(vpm);
     gfx->frame->scene_set_translucent(true);
     for (auto [e, tf, mr] : meshes.each()) {
         const float a = occ->at(static_cast<uint32_t>(e));
         if (a >= 0.999f) continue;
         const math::Matrix m = mesh_world_matrix(e, tf, world_mats, rotations);
+        if (cull_enabled()) {
+            math::Mat4x4 w;
+            math::store(w, m);
+            if (!mesh_visible(planes, e, mr, w, map->glb_path)) continue;
+        }
         draw_mesh_prims(*gfx, *map, m, mr, a);
     }
     gfx->frame->scene_set_translucent(false);   // restore the opaque PSO
@@ -741,6 +959,7 @@ void RenderPlugin::Build(Arimu::App& app) {
     const uint8_t scene = AsIndex(GameScene::World);
     app.AddSystem(ShadowPassSystem,       scene, Arimu::Phase::Render, "ShadowPass");
     app.AddSystem(BeginScenePassSystem,   scene, Arimu::Phase::Render, "BeginScenePass");
+    app.AddSystem(SkyRenderSystem,        scene, Arimu::Phase::Render, "SkyRender");   // 하늘 먼저(depth off)
     app.AddSystem(MeshRenderSystem,       scene, Arimu::Phase::Render, "MeshRender");
     app.AddSystem(BillboardRenderSystem,  scene, Arimu::Phase::Render, "BillboardRender");
 #if !defined(HD2D_RENDERER_SDLGPU)

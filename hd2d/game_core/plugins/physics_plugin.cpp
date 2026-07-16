@@ -300,6 +300,9 @@ void MapBodySpawnSystem(Arimu::Query<MapEntity, MeshRenderer, WorldMatrix, NodeE
 // frame; every static map body the ray crosses is "occluding" and fades to
 // translucent so the character stays visible. The render side reads OcclusionState.
 // The ray ends at chest height, so the ground (a static body too) is never hit.
+// 예외(2026-07-09/14): 벽('wall'/'iwall' 재질)은 **절대 페이드하지 않는다** — 대신
+// wall_spring으로 카메라를 벽 앞까지 당긴다(스프링암). 레이 원점은 probe_dist(기본
+// 거리)의 이상적 눈까지 연장(스프링 발진 방지).
 void OcclusionDetectSystem(Arimu::Res<OrbitCamera> cam,
                            Arimu::Query<Controlled, Transform> players,
                            Arimu::Query<MeshRenderer> meshes,
@@ -310,22 +313,15 @@ void OcclusionDetectSystem(Arimu::Res<OrbitCamera> cam,
     constexpr float kFadeAlpha = 0.30f;   // how transparent an occluder becomes
     constexpr float kChest     = 0.8f;    // aim above the feet so the ground is missed
     constexpr float kSpringBuffer = 0.4f; // 벽 바로 앞에서 멈추는 여유(카메라가 벽에 딱 붙지 않게)
-    constexpr float kSpringMin    = 3.0f; // OrbitCamera.min_distance와 일치(이보다 더 못 당김)
+    constexpr float kSpringMin    = 0.1f; // 스프링 바닥 — 사실상 무제한 당김(2026-07-14, 구 3.0 하한
+                                          // 철폐: 벽 1.1m 앞에서도 카메라가 벽 앞 0.7까지 다이브.
+                                          // CameraOrbit이 스프링 구동 중 min_distance를 0.05로 낮춘다)
 
-    // 히트 정적 바디를 벽('wall' 재질)/프롭으로 분류(설계 2026-07-09): 엔티티 → MeshRenderer →
-    // prims[i].material → map->materials[idx].name. 벽은 페이드 대신 스프링암(카메라 당김), 프롭은
-    // 기존 반투명 페이드. 재질 이름 방식이라 호스트 로더 무손질(GLB 재생성만). 인테리어 맵에만
-    // 'wall' 재질이 있어 자연히 인테리어 한정(아웃도어 벽은 이름이 달라 프롭 취급 = 기존 페이드).
-    auto is_wall = [&](uint32_t e) -> bool {
-        const entt::entity ent = static_cast<entt::entity>(e);
-        if (!meshes.Contains(ent)) return false;
-        const MeshRenderer& mr = meshes.Get<MeshRenderer>(ent);
-        for (const LoadedPrimitive& p : mr.prims)
-            if (p.material >= 0 && p.material < static_cast<int>(map->materials.size()) &&
-                map->materials[p.material].name == "wall")
-                return true;
-        return false;
-    };
+    // 스프링 단일화(2026-07-15 사용자 "적용되는 벽/아닌 벽 나누지 말고 무조건"): 구 설계는
+    // 'wall'/'iwall' 재질만 스프링, 나머지는 반투명 페이드였다 — 이제 **모든** 카메라~플레이어
+    // 사이 정적 히트가 스프링 당김. 페이드 경로는 빈 채로 남는다(occluding 미사용 —
+    // OccluderFadeRenderSystem은 자연 no-op, 잔존 알파는 아래 lerp가 배수).
+    (void)meshes; (void)map;
 
     std::vector<uint32_t> occluding;
     float nearest_wall_pivot = -1.0f;     // 플레이어(오빗 타깃 근사)에서 가장 가까운 벽까지 거리(<0=없음)
@@ -333,7 +329,19 @@ void OcclusionDetectSystem(Arimu::Res<OrbitCamera> cam,
         Float3 pp{}; bool have = false;
         for (auto [e, tf] : players.each()) { pp = tf.position; have = true; break; }
         if (have) {
-            const Float3 cp = cam->position();
+            Float3 cp = cam->position();
+            // 이상적-눈 프로브(2026-07-14, 발진 방지): 레이 원점 = 스프링으로 당겨진 실제 눈이
+            // 아니라 **기본 거리의 이상적 눈**(가슴→눈 방향으로 probe_dist까지 연장). 당겨진
+            // 눈은 벽 안쪽에 있어 벽 히트가 사라지고 → 스프링 해제 → 도로 벽 뒤로 → 재당김의
+            // "붙었다 뚫렸다" 발진을 만든다. probe_dist는 CameraOrbit이 매 프레임 기입(<0=없음).
+            {
+                const float ex = cp.x - pp.x, ey = cp.y - (pp.y + kChest), ez = cp.z - pp.z;
+                const float el = std::sqrt(ex * ex + ey * ey + ez * ez);
+                if (occ->probe_dist > el && el > 1e-3f) {
+                    const float s = occ->probe_dist / el;
+                    cp = { pp.x + ex * s, (pp.y + kChest) + ey * s, pp.z + ez * s };
+                }
+            }
             const JPH::Vec3 dir(pp.x - cp.x, (pp.y + kChest) - cp.y, pp.z - cp.z);
             if (dir.LengthSq() > 0.04f) {   // span = cam -> chest (a finite segment)
                 const float ray_len = std::sqrt(dir.LengthSq());
@@ -348,18 +356,12 @@ void OcclusionDetectSystem(Arimu::Res<OrbitCamera> cam,
                     ray, rs, hits,
                     JPH::SpecifiedBroadPhaseLayerFilter(BPLayers::NON_MOVING),
                     JPH::SpecifiedObjectLayerFilter(Layers::NON_MOVING));
-                JPH::BodyInterface& bi = phys->system->GetBodyInterface();
                 for (const auto& h : hits.mHits) {
-                    const uint32_t e = static_cast<uint32_t>(bi.GetUserData(h.mBodyID));
-                    if (is_wall(e)) {
-                        // 벽: 페이드 안 함. 플레이어에서 이 벽까지 거리 = ray_len*(1-fraction);
-                        // 가장 가까운 벽(최소)이 카메라를 가장 많이 당긴다(모든 벽을 화면 밖으로).
-                        const float pivot_d = ray_len * (1.0f - h.mFraction);
-                        if (nearest_wall_pivot < 0.0f || pivot_d < nearest_wall_pivot)
-                            nearest_wall_pivot = pivot_d;
-                    } else {
-                        occluding.push_back(e);   // 프롭/기타 정적 바디: 반투명 페이드(기존)
-                    }
+                    // 무조건 스프링: 플레이어에서 이 히트까지 거리 = ray_len*(1-fraction);
+                    // 가장 가까운 것(최소)이 카메라를 가장 많이 당긴다(전부 화면 밖으로).
+                    const float pivot_d = ray_len * (1.0f - h.mFraction);
+                    if (nearest_wall_pivot < 0.0f || pivot_d < nearest_wall_pivot)
+                        nearest_wall_pivot = pivot_d;
                 }
                 if (sys::env("HD2D_OCCDEBUG")) {
                     static int s_n = 0;
@@ -373,8 +375,8 @@ void OcclusionDetectSystem(Arimu::Res<OrbitCamera> cam,
         }
     }
 
-    // 스프링암 목표 오빗 거리: 벽 있으면 (가장 가까운 벽 - 버퍼), min_distance 이상으로 클램프;
-    // 없으면 <0 → 카메라는 인테리어 기본 거리로 복귀(CameraOrbitSystem 인테리어 블록이 소비).
+    // 스프링암 목표 오빗 거리: 벽 있으면 (가장 가까운 벽 - 버퍼), 바닥 0.1(사실상 무제한 당김);
+    // 없으면 <0 → 카메라는 기본 거리(인테리어 4.5 / 옥외 휠 거리)로 복귀(CameraOrbitSystem 소비).
     // 프롭 페이드와 독립 — 같은 프레임에 벽 스프링 + 프롭 페이드가 동시 성립.
     occ->wall_spring = (nearest_wall_pivot >= 0.0f)
                            ? std::max(kSpringMin, nearest_wall_pivot - kSpringBuffer)
@@ -406,112 +408,32 @@ void OcclusionDetectSystem(Arimu::Res<OrbitCamera> cam,
     }
 }
 
-// Interpret gameplay's Transform writes as desired movement, resolve them
-// through CharacterVirtual (walls/slopes/steps/gravity), write back, and keep
-// the kinematic mirror capsule in sync for dynamics & cloth.
+// 캐릭터 물리 은퇴(사용자 2026-07-15 "물리엔진 자체를 없애 — 이동은 로직으로만"):
+// CharacterVirtual/중력/미러 캡슐 전부 제거. 이동은 게임 로직이 쓴 Transform이 그대로
+// 서고, 접지(Y)와 가둠(XZ)은 RouteConfineSystem이 내비메시 스냅으로 소유한다(구 낙하↔
+// unbury 스냅 루프의 근본 원인 = 지형 틈으로 캡슐이 빠지는 것 — 원천 제거). 이 시스템은
+// CharacterBody를 **데이터 전용**(radius/half_height — 군중 분리·스케일 회귀 소비)으로만
+// 채운다. Jolt는 정적 맵/프롭(보따리)/천/카메라 레이캐스트 용도로 유지.
 void CharacterPhysicsSystem(Arimu::Query<Character, Transform> characters,
                             Arimu::Query<CharacterBody> bodies,
                             Arimu::Query<BillboardSprite> sprites,
                             Arimu::Res<RenderSettings> rs,
-                            Arimu::Res<FrameTime> time,
-                            Arimu::ResMut<Physics> phys,
                             Arimu::Commands cmd) {
-    if (!phys->ready) return;
-    const float dt = std::min(std::max(time->dt, 1e-4f), kMaxStepDt);
-    JPH::PhysicsSystem& ps = *phys->system;
-    JPH::BodyInterface& bi = ps.GetBodyInterface();
-
     for (auto [e, tf] : characters.each()) {   // Character is an empty tag
-        if (!bodies.Contains(e)) {
-            // Lazy create: a capsule whose position = the FEET. Height follows
-            // the unit convention (32px = 1m): sprite frame_px / pixels_per_unit,
-            // so render height and collision height agree for any sheet size.
-            float total = 1.0f;                             // no sprite: 1m default
-            if (sprites.Contains(e)) {
-                const SpriteSheet& sheet = sprites.Get<BillboardSprite>(e).sheet;
-                if (!sheet.valid) continue;  // sheet still loading: wait a frame
-                total = static_cast<float>(sheet.frame_px) / rs->pixels_per_unit;
-            }
-            // 빌보드 스케일 반영(2026-07-14, 사용자 "벽에 낑기고 무조건 합쳐지려고"):
-            // 재앙 보스(스폰 Transform.scale 1.1~1.8)의 캡슐이 frame_px만 보고 1m로
-            // 고정돼, 큰 스프라이트가 서로/벽에 깊이 파고들었다(충돌은 정상인데
-            // 그림만 관통 — 밀집 시 한 덩어리처럼 보임). 렌더 높이 = frame×scale이므로
-            // 충돌 높이도 같이 키운다. 기존 캐스트는 전부 scale=1이라 무영향.
-            if (tf.scale > 0.01f) total *= tf.scale;
-            // Rescue a buried spawn BEFORE the capsule exists: a character placed
-            // inside the static world would otherwise freeze there forever.
-            {
-                const JPH::Vec3 safe = unbury(ps, to_jph(tf.position));
-                if (safe.GetY() != tf.position.y) {
-                    HD2D_INFO("[phys] lifted buried character {} {:.2f} -> {:.2f}",
-                              static_cast<uint32_t>(e), tf.position.y, safe.GetY());
-                    tf.position.y = safe.GetY();
-                }
-            }
-            CharacterBody cb;
-            cb.radius = 0.28f * total;   // keep the capsule proportions per height
-            cb.half_height = std::max(0.05f, 0.5f * total - cb.radius);
-            JPH::Ref<JPH::CharacterVirtualSettings> settings =
-                new JPH::CharacterVirtualSettings();
-            settings->mShape =
-                JPH::RotatedTranslatedShapeSettings(
-                    JPH::Vec3(0, cb.half_height + cb.radius, 0), JPH::Quat::sIdentity(),
-                    new JPH::CapsuleShape(cb.half_height, cb.radius))
-                    .Create()
-                    .Get();
-            settings->mSupportingVolume =
-                JPH::Plane(JPH::Vec3::sAxisY(), -cb.radius * 0.9f);
-            cb.character = new JPH::CharacterVirtual(
-                settings.GetPtr(), to_jph(tf.position), JPH::Quat::sIdentity(), 0, &ps);
-
-            // Kinematic mirror so rigid bodies / cloth collide with characters.
-            JPH::BodyCreationSettings mirror(
-                settings->mShape.GetPtr(), to_jph(tf.position), JPH::Quat::sIdentity(),
-                JPH::EMotionType::Kinematic, Layers::MOVING);
-            cb.mirror = bi.CreateAndAddBody(mirror, JPH::EActivation::Activate);
-            cmd.AddComponent<CharacterBody>(e, cb);
-            continue;   // starts resolving next frame
+        if (bodies.Contains(e)) continue;
+        // 유닛 규약(32px = 1m): sprite frame_px / pixels_per_unit × 빌보드 스케일.
+        float total = 1.0f;                             // no sprite: 1m default
+        if (sprites.Contains(e)) {
+            const SpriteSheet& sheet = sprites.Get<BillboardSprite>(e).sheet;
+            if (!sheet.valid) continue;  // sheet still loading: wait a frame
+            total = static_cast<float>(sheet.frame_px) / rs->pixels_per_unit;
         }
-
-        CharacterBody& cb = bodies.Get<CharacterBody>(e);
-        JPH::CharacterVirtual& ch = *cb.character;
-        const JPH::Vec3 current = ch.GetPosition();
-        const JPH::Vec3 desired = to_jph(tf.position);
-        const JPH::Vec3 delta = desired - current;
-
-        // Teleports (respawn, scripted tests) snap instead of flinging — lifted
-        // out of the static world first so a buried target can't wedge us.
-        if (delta.Length() > 3.0f) {
-            const JPH::Vec3 safe = unbury(ps, desired);
-            ch.SetPosition(safe);
-            tf.position = Float3{safe.GetX(), safe.GetY(), safe.GetZ()};
-            cb.vertical_vel = 0.0f;
-            bi.SetPositionAndRotation(cb.mirror, safe, JPH::Quat::sIdentity(),
-                                      JPH::EActivation::Activate);
-            continue;
-        }
-
-        cb.vertical_vel += kGravity * dt;
-        if (cb.grounded && cb.vertical_vel < 0.0f) cb.vertical_vel = -0.5f;
-        const JPH::Vec3 velocity(delta.GetX() / dt, cb.vertical_vel, delta.GetZ() / dt);
-        ch.SetLinearVelocity(velocity);
-
-        JPH::CharacterVirtual::ExtendedUpdateSettings update_settings;
-        JPH::IgnoreSingleBodyFilter ignore_self(cb.mirror);
-        ch.ExtendedUpdate(dt, JPH::Vec3(0, kGravity, 0), update_settings,
-                          ps.GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
-                          ps.GetDefaultLayerFilter(Layers::MOVING), ignore_self, {},
-                          *phys->temp);
-
-        const JPH::Vec3 result = ch.GetPosition();
-        tf.position = Float3{result.GetX(), result.GetY(), result.GetZ()};
-        cb.grounded =
-            ch.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
-        if (cb.grounded && cb.vertical_vel < 0.0f) cb.vertical_vel = 0.0f;
-
-        bi.MoveKinematic(cb.mirror, result, JPH::Quat::sIdentity(), dt);
+        if (tf.scale > 0.01f) total *= tf.scale;
+        CharacterBody cb;
+        cb.radius = 0.28f * total;
+        cb.half_height = std::max(0.05f, 0.5f * total - cb.radius);
+        cmd.AddComponent<CharacterBody>(e, cb);
     }
-    (void)rs;
 }
 
 // Advance the Jolt world once per frame.

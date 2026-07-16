@@ -48,7 +48,7 @@ cbuffer Draw : register(b1) {
     float  gMetallic;
     float  gRoughness;
     float  gAlphaCutoff;  // sprites/MASK: alpha test threshold; 0 = opaque
-    uint   gFlags;        // bit0 nearest, bit1 clamp, bit2 has normal map
+    uint   gFlags;        // bit0 nearest, bit1 clamp, bit2 has normal map, bit3 unlit(sky)
     float2 gUvOffset;     // sprite frame/direction sub-rect select
     float2 gUvScale;
     float3 gEmissive;     // emissive factor * strength (linear)
@@ -195,6 +195,11 @@ float4 PSMain(VSOut i) : SV_Target {
 
     // Alpha test (no blend) -> billboards get free depth sorting.
     if (surf.a < gAlphaCutoff) discard;
+
+    // bit3(8) = unlit (3D skybox): no lights/shadow/ambient — the sky IS the
+    // light source. Emissive still adds (glowing sun disc etc.).
+    [branch] if (gFlags & 8)
+        return float4(surf.rgb + gEmissive * sample_map(gTexEmissive, i.uv).rgb, surf.a);
 
     float3 N = normalize(i.normal);
     [branch] if (gFlags & 4) {

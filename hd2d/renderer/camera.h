@@ -47,7 +47,7 @@ private:
     Float3 target_ = {0.0f, 0.5f, 0.0f};
     Float3 pos_ = {0.0f, 5.0f, 10.0f};
     float yaw_deg_ = 0.0f;
-    float distance_ = 12.0f;
+    float distance_ = 6.0f;   // 기본 카메라 거리(2026-07-15 사용자 1/2 지시, 구 12)
 };
 
 } // namespace hd2d

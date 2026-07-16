@@ -17,8 +17,10 @@ void OrbitCamera::update(float mouse_dx, float wheel_ticks, float dt) {
     if (yaw_deg_ >= 360.0f) yaw_deg_ -= 360.0f;
     if (yaw_deg_ < 0.0f)    yaw_deg_ += 360.0f;
 
-    // --- zoom (distance), clamped ---
-    distance_ -= wheel_ticks * zoom_step;
+    // --- zoom: 휠 바인딩 제거(2026-07-15 사용자 "스크롤 바인딩 자체를 없애") ---
+    // 거리 = 게임(CameraOrbitSystem)이 기본거리/스프링으로 직접 구동. 휠은 메뉴
+    // 스크롤(dialogue)에만 남는다.
+    (void)wheel_ticks;
     distance_ = std::clamp(distance_, min_distance, max_distance);
 
     // --- derive camera position from fixed pitch + yaw + distance, orbiting the

@@ -64,6 +64,10 @@ public:
     // fade draws faded meshes translucent between set_translucent(true) / (false).
     void scene_set_translucent(bool on);
 
+    // Bind (true) / unbind (false) the skybox PSO: depth OFF, draw FIRST after
+    // scene_begin. Pair with DrawMaterial.flags bit 8 (unlit) for sky meshes.
+    void scene_set_sky(bool on);
+
     // Draw one mesh primitive at `model` with `mat`. alpha<1 = occlusion fade
     // (translucent, alpha-test off). Resolves rhi handles -> GPU resources internally.
     void scene_draw_mesh(rhi::GpuMesh mesh, const math::Matrix& model,
@@ -96,6 +100,7 @@ private:
     ID3D12GraphicsCommandList* cmd_ = nullptr;
     rhi::GpuTexture fb_white_{};    // engine fallback textures, registered in the table at init
     rhi::GpuTexture fb_normal_{};
+    bool sky_on_ = false;   // scene_set_sky 브래킷 중 — two-sided PSO 전환이 sky PSO를 깨지 않게
 };
 
 } // namespace hd2d

@@ -359,6 +359,9 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
 
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
+            // ImGui가 마우스/키를 받도록 모든 이벤트를 렌더러 UI 레이어로 먼저 전달
+            // (2026-07-15 — aima 마이그레이션 때 빠졌던 배선: F1 패널 클릭 불능의 근원).
+            renderer.process_event(ev);
             switch (ev.type) {
                 case SDL_EVENT_QUIT:
                     running = false; break;
@@ -372,17 +375,25 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
                     renderer.resize(w, h);
                     break;
                 }
+                // 마우스류는 ImGui가 쓰는 동안(wants_mouse) 게임 입력에 안 채운다
+                // (패널 슬라이더 드래그가 카메라 회전/공격으로 새는 것 방지 — 구
+                //  main.cpp io.WantCaptureMouse 게이팅 복원, 2026-07-15).
                 case SDL_EVENT_MOUSE_WHEEL:
-                    input.wheel += ev.wheel.y; break;
+                    if (!renderer.wants_mouse()) input.wheel += ev.wheel.y;
+                    break;
                 case SDL_EVENT_MOUSE_MOTION:
-                    input.mouse_dx += ev.motion.xrel;
-                    input.mouse_dy += ev.motion.yrel;
+                    if (!renderer.wants_mouse()) {
+                        input.mouse_dx += ev.motion.xrel;
+                        input.mouse_dy += ev.motion.yrel;
+                    }
                     break;
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    if (renderer.wants_mouse()) break;
                     if (ev.button.button == SDL_BUTTON_LEFT)  input.lmb_pressed = true;
                     if (ev.button.button == SDL_BUTTON_RIGHT) input.rmb_pressed = true;
                     break;
                 case SDL_EVENT_MOUSE_BUTTON_UP:
+                    if (renderer.wants_mouse()) break;
                     if (ev.button.button == SDL_BUTTON_LEFT)  input.lmb_released = true;
                     if (ev.button.button == SDL_BUTTON_RIGHT) input.rmb_released = true;
                     break;
