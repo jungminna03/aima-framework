@@ -21,6 +21,31 @@
 #   AIMA_SHOT=/tmp/shot.png ./build/mac-arm64-debug/bin/aima_game   # black window, exits 0
 # =============================================================================
 cmake_minimum_required(VERSION 3.25)
+
+# --- vcpkg toolchain (robust against GUI IDEs) -------------------------------
+# The presets pass the toolchain via $env{VCPKG_ROOT}. IDEs launched from the
+# macOS GUI (CLion/Xcode from Finder or JetBrains Toolbox) do NOT source ~/.zshrc,
+# so VCPKG_ROOT is empty there and CMAKE_TOOLCHAIN_FILE resolves to a bogus
+# "/scripts/buildsystems/vcpkg.cmake" → configure fails with a red X. Recover by
+# locating vcpkg ourselves (HOME is always set, even for GUI apps). Must run
+# BEFORE project(), where the toolchain file is consumed.
+if(NOT CMAKE_TOOLCHAIN_FILE OR NOT EXISTS "${CMAKE_TOOLCHAIN_FILE}")
+    set(_vcpkg_candidates "")
+    if(DEFINED ENV{VCPKG_ROOT})
+        list(APPEND _vcpkg_candidates "$ENV{VCPKG_ROOT}")
+    endif()
+    list(APPEND _vcpkg_candidates
+        "$ENV{HOME}/vcpkg" "$ENV{USERPROFILE}/vcpkg" "C:/vcpkg" "C:/dev/vcpkg")
+    foreach(_vc IN LISTS _vcpkg_candidates)
+        if(EXISTS "${_vc}/scripts/buildsystems/vcpkg.cmake")
+            set(CMAKE_TOOLCHAIN_FILE "${_vc}/scripts/buildsystems/vcpkg.cmake"
+                CACHE FILEPATH "Vcpkg toolchain file" FORCE)
+            message(STATUS "vcpkg toolchain auto-located: ${CMAKE_TOOLCHAIN_FILE}")
+            break()
+        endif()
+    endforeach()
+endif()
+
 project(aima_game LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)

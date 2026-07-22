@@ -43,6 +43,13 @@
 #include <string>
 
 namespace aima {
+
+// Headless sim-ready gate (see host.h). Plain flag: set once from the game's
+// update, read from the host loop — same thread.
+static bool g_sim_ready = false;
+void MarkSimReady() { g_sim_ready = true; }
+bool SimReady()     { return g_sim_ready; }
+
 namespace {
 
 // --------------------------------------------------------------------------
@@ -332,6 +339,15 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
     if (const char* sf = std::getenv("AIMA_SHOTFRAME")) shot_frame = std::atoi(sf);
     int max_frames = cfg.max_frames;
     if (const char* mf = std::getenv("AIMA_MAXFRAMES")) max_frames = std::atoi(mf);
+    // AIMA_FIXED_DT=<sec>: headless test mode — advance the sim by a FIXED step per
+    // frame (wall clock ignored) so runs are deterministic, immune to machine load,
+    // and as fast as the CPU allows. Presents are throttled (below) since nothing
+    // watches the window; the shot frame still presents so screenshots keep working.
+    float fixed_dt = 0.0f;
+    if (const char* fd = std::getenv("AIMA_FIXED_DT")) fixed_dt = static_cast<float>(std::atof(fd));
+    // AIMA_FRAMES_AFTER_READY=1: frames only count once the game calls
+    // aima::MarkSimReady() (loading is wall-clock-bound; don't bill it).
+    const bool frames_after_ready = std::getenv("AIMA_FRAMES_AFTER_READY") != nullptr;
 
     // ---- headless video capture -----------------------------------------------
     // AIMA_REC=<dir>: dump every rendered frame as f_%06d.png into <dir> between
@@ -470,14 +486,11 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
         float dt = static_cast<float>((now - prev) / freq);
         prev = now;
         if (dt > 0.1f) dt = 0.1f;   // clamp huge stalls
-        // Determinism (PAL step 8): AIMA_FIXEDSTEP/HD2D_FIXEDSTEP feeds a CONSTANT dt so
-        // the sim is machine-speed-independent — reproducible headless runs (TDD) and
-        // identical behaviour across machines. Default keeps wall-clock dt for smooth
-        // live play. (A full real-time accumulator needs App to split sim/render phases;
-        // Tick currently couples them, so this opt-in constant step is the safe first cut.)
+        if (fixed_dt > 0.0f) dt = fixed_dt;   // AIMA_FIXED_DT: deterministic step (RC harness)
+        // Upstream determinism alias: AIMA_FIXEDSTEP/HD2D_FIXEDSTEP = constant 1/60 step.
         static const bool s_fixed_step =
             std::getenv("AIMA_FIXEDSTEP") != nullptr || std::getenv("HD2D_FIXEDSTEP") != nullptr;
-        if (s_fixed_step) dt = 1.0f / 60.0f;
+        if (fixed_dt <= 0.0f && s_fixed_step) dt = 1.0f / 60.0f;
 
         // Asset/shader hot-reload: drain the watcher and route to project hooks.
         hot.poll([&](const FileEvent& fe) {
@@ -542,6 +555,12 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
 
         if (frame_hook_) frame_hook_(app, frame_no, dt);
 
+        // Fixed-dt runs present only every 8th frame (and around the shot frame);
+        // tell the backend up front so it can drop the whole frame's draw work.
+        const bool near_shot = shot_path && frame_no + 1 >= shot_frame - 1;
+        const bool will_present = fixed_dt <= 0.0f || near_shot || (frame_no & 7) == 0;
+        renderer.set_frame_skip(!will_present);
+
         // ---- the renderer-agnostic frame ----
         FrameHandle frame = renderer.begin_frame(cfg.clear_color);
         (void)frame;   // the project's render systems read it from their own resource
@@ -552,7 +571,8 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
         const int scene_index = scene_hook_ ? scene_hook_(app) : 0;
         app.Tick(scene_index, dt);
 
-        renderer.end_frame(cfg.vsync);
+        // Under AIMA_FIXED_DT the present (vsync) is the bottleneck, not the sim.
+        if (will_present) renderer.end_frame(cfg.vsync);
 
         // Per-frame game service: deferred structural work a system could only FLAG
         // (Tick done, no systems iterating) — e.g. a portal map reload. Runs AFTER
@@ -563,7 +583,7 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
         // fence never signals -> the next frame hangs forever (portal-exit freeze).
         if (use_module && game.service) game.service(&app);
 
-        ++frame_no;
+        if (!frames_after_ready || SimReady()) ++frame_no;
 
         if (audio_on) audio.poll();
 
@@ -587,6 +607,13 @@ int Host::run(const HostConfig& cfg, Renderer& renderer) {
     hot.shutdown();
     renderer.shutdown();
     window.shutdown();
+    // FULL SDL teardown. window.shutdown() only quits the VIDEO/GAMEPAD subsystems;
+    // without a final SDL_Quit() macOS leaves the NSApplication / window-server state
+    // half-initialised, so the process doesn't release cleanly and the NEXT launch
+    // can't grab input focus (the recurring "focus won't stick / session won't die"
+    // bug). SDL_Quit() releases everything; "session closed" marks a complete exit.
+    SDL_Quit();
+    AIMA_INFO("session closed");
     return 0;
 }
 

@@ -177,4 +177,12 @@ private:
     BindProvider bind_provider_;
 };
 
+// ---- Headless sim-ready gate ------------------------------------------------
+// With AIMA_FRAMES_AFTER_READY=1 the host does not count frames against
+// AIMA_MAXFRAMES / AIMA_SHOTFRAME until the game calls MarkSimReady() (e.g. on
+// entering battle). Lets fixed-dt test runs burn through wall-clock-bound
+// loading without eating the frame budget. No-op without the env var.
+void MarkSimReady();
+bool SimReady();
+
 } // namespace aima

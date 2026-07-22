@@ -98,6 +98,11 @@ public:
     // for backends that present synchronously.
     virtual void flush() {}
 
+    // Headless throttling: the host marks frames it will NOT present (fixed-dt
+    // test runs skip 7 of 8 presents) so the backend can drop all draw work for
+    // that frame. Default: no-op (backends may ignore the hint).
+    virtual void set_frame_skip(bool /*skip*/) {}
+
     // Destroy the device + swapchain. Called once at shutdown, before the window
     // is destroyed. After this the Renderer must not be used again.
     virtual void shutdown() = 0;

@@ -14,7 +14,8 @@
 #
 # What it does, in order (each step is skipped if already satisfied):
 #   1. Verify macOS + Xcode Command Line Tools (xcode-select --install if missing).
-#   2. brew install cmake + ninja + git if missing.
+#   2. Install Homebrew if missing, then brew install cmake/ninja/git + the build
+#      tools vcpkg ports need (pkg-config, autoconf, automake, libtool, nasm).
 #   3. Clone + bootstrap vcpkg to ~/vcpkg if needed; persist VCPKG_ROOT.
 #   4. SCAFFOLD: stamp tools/template/ into the parent (MyGame) on first run
 #      (game/, CMakeLists.txt, presets, .vscode/.run, aima.project.json). Never
@@ -95,10 +96,41 @@ fi
 if [ "$SKIP_INSTALL" = "1" ]; then
   ok "--skip-install: assuming cmake / ninja / git are already present."
 else
-  command -v brew >/dev/null 2>&1 || { echo "Homebrew not found. Install from https://brew.sh then re-run." >&2; exit 1; }
+  # Bring an already-installed brew onto PATH (common: installed but not yet in
+  # this shell, or a GUI-launched shell that didn't source the profile).
+  if ! command -v brew >/dev/null 2>&1; then
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+      [ -x "$b" ] && eval "$("$b" shellenv)" && break
+    done
+  fi
+  # Auto-install Homebrew if it's genuinely missing (the real first-Mac blocker).
+  # The installer also pulls the Xcode Command Line Tools (compiler) if needed.
+  if ! command -v brew >/dev/null 2>&1; then
+    info "Homebrew not found — installing it (you may be prompted for your password)..."
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+      || { echo "Homebrew install failed. Install it manually from https://brew.sh then re-run." >&2; exit 1; }
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+      [ -x "$b" ] && eval "$("$b" shellenv)" && break
+    done
+    # Persist brew on PATH for future shells (login-shell profile, per brew docs).
+    brewbin="$(command -v brew)"
+    if [ -n "$brewbin" ] && ! grep -qs 'brew shellenv' "$HOME/.zprofile" 2>/dev/null; then
+      printf '\neval "$(%s shellenv)"\n' "$brewbin" >> "$HOME/.zprofile"
+    fi
+  fi
+  command -v brew >/dev/null 2>&1 || { echo "brew still not on PATH; open a NEW terminal and re-run." >&2; exit 1; }
+  ok "Homebrew: $(command -v brew)"
   for pkg in cmake ninja git; do
     if command -v "$pkg" >/dev/null 2>&1; then ok "$pkg already present ($(command -v "$pkg"))."
     else info "brew install $pkg"; brew install "$pkg"; fi
+  done
+  # Build tools vcpkg ports need to compile from source (SDL3 / freetype /
+  # harfbuzz / libjpeg-turbo / ...). Missing these is the usual cause of
+  # "vcpkg install failed" on a fresh Mac. Keyed by their binaries so re-runs skip.
+  for tool in "pkg-config:pkg-config" "autoconf:autoconf" "automake:automake" "libtool:glibtool" "nasm:nasm"; do
+    bin="${tool##*:}"; formula="${tool%%:*}"
+    if command -v "$bin" >/dev/null 2>&1; then ok "$formula already present."
+    else info "brew install $formula"; brew install "$formula" || warn "brew install $formula failed (continuing)"; fi
   done
 fi
 for t in cmake ninja git; do
@@ -156,66 +188,24 @@ scaffold_project(){
 scaffold_project
 
 # --- 5. IDE picker (opens MyGame) -------------------------------------------
-# IDE wiring (.vscode/, .run/) is intentionally git-ignored — so it's regenerated
-# per-machine here from the template whenever it's missing, even on an already-
-# scaffolded project (where step 4's full scaffold is skipped). This is what lets
-# a fresh clone get working IDE files without ever committing them. Existing
-# wiring is left untouched (your local tweaks are safe). Xcode needs none of this:
-# its project is generated fresh by `cmake -G Xcode` below.
-stamp_wiring(){   # $1 = wiring subdir to ensure exists (e.g. .vscode)
-  local sub="$1"
-  if [ -e "$REPO_ROOT/$sub" ]; then
-    ok "$sub/ already present — left untouched."
-  elif [ -d "$TEMPLATE_DIR/$sub" ]; then
-    cp -R "$TEMPLATE_DIR/$sub" "$REPO_ROOT/$sub"
-    ok "Regenerated $sub/ from template (git-ignored; per-machine, not committed)."
-  else
-    warn "Template has no $sub/ to regenerate."
-  fi
-}
-
-# Resolve this project's runnable CMake target / exe name. Priority:
-#   1. aima.project.json "run" basename (the framework convention; .app-aware —
-#      the inner Mach-O is already the target name).
-#   2. first add_executable(<name> ...) in the project's CMakeLists.txt — lets
-#      pre-existing repos (e.g. hd2d_engine) work without an aima.project.json.
-#   3. fallback: aima_game (the scaffold default).
-project_exe_name(){
-  local name=""
-  [ -f "$REPO_ROOT/aima.project.json" ] && name="$(python3 -c "import json,os;print(os.path.basename((json.load(open('$REPO_ROOT/aima.project.json')).get('run') or '')))" 2>/dev/null || true)"
-  if [ -z "$name" ] && [ -f "$REPO_ROOT/CMakeLists.txt" ]; then
-    name="$(grep -hoE 'add_executable\([[:space:]]*[A-Za-z0-9_]+' "$REPO_ROOT/CMakeLists.txt" | head -1 | sed -E 's/.*add_executable\([[:space:]]*//')"
-  fi
-  printf '%s' "${name:-aima_game}"
-}
-
-# CLion's shared run config (.run/) hardcodes the target name, so a plain copy
-# would point at a non-existent 'aima_game' target in projects whose exe differs.
-# Regenerate it with the real target substituted in (and the file named after it).
-stamp_run_config(){
-  if [ -d "$REPO_ROOT/.run" ]; then
-    ok ".run/ already present — left untouched."; return
-  fi
-  local src="$TEMPLATE_DIR/.run/aima_game.run.xml"
-  if [ ! -f "$src" ]; then
-    warn "Template has no .run/aima_game.run.xml to regenerate."; return
-  fi
-  local target; target="$(project_exe_name)"
-  mkdir -p "$REPO_ROOT/.run"
-  sed "s/aima_game/$target/g" "$src" > "$REPO_ROOT/.run/$target.run.xml"
-  ok "Regenerated .run/$target.run.xml (CMake target '$target'; git-ignored, per-machine)."
-}
-
 setup_ide(){
   local choice="$IDE"
   if [ -z "$choice" ]; then
     if [ "$OPEN_IDE" != "1" ] || [ ! -t 0 ]; then choice="none"; else
       printf '\n\033[36mWhich IDE do you want to use?\033[0m\n'
       printf '  [1] VS Code   [2] CLion   [3] Xcode   [4] none (skip)\n'
-      read -r -p 'Enter 1, 2, 3, or 4: ' ans
-      case "$ans" in
-        1) choice="vscode" ;; 2) choice="clion" ;; 3) choice="xcode" ;; *) choice="none" ;;
-      esac
+      # Loop until a valid choice so a stray Enter / typo can't silently skip the
+      # IDE step (which looked like "setup succeeded but nothing opened").
+      while :; do
+        read -r -p 'Enter 1, 2, 3, or 4: ' ans
+        case "$ans" in
+          1) choice="vscode"; break ;;
+          2) choice="clion";  break ;;
+          3) choice="xcode";  break ;;
+          4) choice="none";   break ;;
+          *) echo "  Please type 1, 2, 3, or 4." ;;
+        esac
+      done
     fi
   fi
   if [ "$OPEN_IDE" != "1" ] && [ "$choice" != "xcode" ]; then choice="none"; fi
@@ -224,26 +214,19 @@ setup_ide(){
     none)
       ok "Skipping IDE setup." ;;
     vscode)
-      stamp_wiring .vscode
       info "VS Code — one-click run is pre-wired (.vscode/ was stamped into the project):"
       echo  "    1. Install the recommended extensions when prompted (CMake Tools + C/C++)."
       echo  "    2. Pick the '$PRESET' preset in the CMake status bar (configures automatically)."
       echo  "    3. Press F5  ->  builds aima_game, then launches it (black window). Done."
-      info "Opening VS Code at the project (adds it to File > Open Recent)..."
       if command -v code >/dev/null 2>&1; then code "$REPO_ROOT"
-      elif open -a "Visual Studio Code" "$REPO_ROOT" 2>/dev/null; then :   # LaunchServices finds it anywhere
+      elif [ -d "/Applications/Visual Studio Code.app" ]; then open -a "Visual Studio Code" "$REPO_ROOT"
       else warn "VS Code not found. Install it (https://code.visualstudio.com) and open $REPO_ROOT."; fi ;;
     clion)
-      local target; target="$(project_exe_name)"
-      stamp_run_config
-      info "CLion — a shared run config (.run/$target.run.xml) was regenerated for this machine:"
+      info "CLion — a shared run config (.run/aima_game.run.xml) was stamped into the project:"
       echo  "    1. File > Open > select  $REPO_ROOT"
       echo  "    2. One time: enable the '$PRESET' CMake preset profile when CLion offers it."
-      echo  "    3. Pick the '$target' run config (top-right) and press Run. Done."
-      info "Opening CLion at the project (adds it to Recent Projects)..."
-      # `open -a CLion` resolves via LaunchServices, so it works for /Applications
-      # AND JetBrains Toolbox installs under ~/Applications (the old -d gate missed those).
-      if open -a CLion "$REPO_ROOT" 2>/dev/null; then :
+      echo  "    3. Pick the 'aima_game' run config (top-right) and press Run. Done."
+      if [ -d "/Applications/CLion.app" ]; then open -a CLion "$REPO_ROOT"
       elif command -v clion >/dev/null 2>&1; then clion "$REPO_ROOT"
       else warn "CLion not found. Install it (https://www.jetbrains.com/clion) and open $REPO_ROOT."; fi ;;
     xcode)
@@ -286,10 +269,7 @@ setup_ide(){
 </dict></dict></plist>
 PLIST
         echo "    Scheme '$scheme' is pinned — just press Run (▶)."
-        if [ "$OPEN_IDE" = "1" ]; then
-          info "Opening Xcode at the project (adds it to File > Open Recent)..."
-          open -a Xcode "$xcodeproj"
-        fi
+        if [ "$OPEN_IDE" = "1" ]; then open "$xcodeproj"; fi
       fi ;;
     *) warn "Unknown IDE '$choice' — skipping." ;;
   esac
@@ -302,8 +282,10 @@ build_project(){
   cmake --preset "$PRESET"
   info "Building (cmake --build --preset $PRESET)..."
   cmake --build --preset "$PRESET"
-  # exe name from aima.project.json's "run" / CMakeLists target (see helper).
-  local exename; exename="$(project_exe_name)"
+  # exe name from aima.project.json's "run" (scaffold default = aima_game;
+  # existing games like RC = ProjectRC); fall back to aima_game.
+  local exename="aima_game"
+  [ -f "$REPO_ROOT/aima.project.json" ] && exename="$(python3 -c "import json,os;print(os.path.basename((json.load(open('$REPO_ROOT/aima.project.json')).get('run') or 'aima_game')))" 2>/dev/null || echo aima_game)"
   # On macOS the game is a .app bundle, so the binary lives inside it; fall back
   # to the plain path for non-bundle / non-mac builds.
   local exe="$REPO_ROOT/build/$PRESET/bin/$exename.app/Contents/MacOS/$exename"

@@ -94,6 +94,28 @@ function Find-VsInstall {
         -property installationPath 2>$null | Select-Object -First 1
 }
 
+# Locate an EXISTING CLion across every install layout (winget/standalone in
+# Program Files, per-user, and JetBrains Toolbox) plus PATH — so we never
+# reinstall a CLion the user already has (e.g. via Toolbox).
+function Find-CLion {
+    $globs = @(
+        "$env:ProgramFiles\JetBrains\CLion*\bin\clion64.exe",
+        "${env:ProgramFiles(x86)}\JetBrains\CLion*\bin\clion64.exe",
+        "$env:LOCALAPPDATA\Programs\CLion*\bin\clion64.exe",
+        "$env:LOCALAPPDATA\JetBrains\Toolbox\apps\CLion\*\*\bin\clion64.exe",
+        "$env:LOCALAPPDATA\JetBrains\Toolbox\apps\clion\*\*\bin\clion64.exe"
+    )
+    foreach ($g in $globs) {
+        $hit = Get-ChildItem $g -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+    foreach ($name in 'clion64','clion') {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+    }
+    return $null
+}
+
 # Stamp the project skeleton into the PARENT (MyGame) on first run.
 function Scaffold-Project {
     if (Test-Path (Join-Path $RepoRoot 'CMakeLists.txt')) {
@@ -187,13 +209,29 @@ function Setup-Ide {
         else { Write-Host "    (Open VS Code, then File > Open Folder > $RepoRoot.)" }
     }
     elseif ($choice -eq 'clion') {
-        $clionExe = Get-ChildItem "$env:ProgramFiles\JetBrains\CLion*\bin\clion64.exe" -ErrorAction SilentlyContinue |
-                    Sort-Object FullName -Descending | Select-Object -First 1
-        if ($clionExe) { Ok "CLion already present ($($clionExe.FullName))." }
+        $clionExe = Find-CLion
+        if ($clionExe) { Ok "CLion already present ($clionExe) — not reinstalling." }
         else {
             Ensure-WingetPackage -Id 'JetBrains.CLion' -ProbeCommand $null
-            $clionExe = Get-ChildItem "$env:ProgramFiles\JetBrains\CLion*\bin\clion64.exe" -ErrorAction SilentlyContinue |
-                        Sort-Object FullName -Descending | Select-Object -First 1
+            $clionExe = Find-CLion
+        }
+        # CLion greys out the Build/Run hammer when the only ENABLED CMake
+        # profile is a plain (non-preset) one — it carries no vcpkg toolchain,
+        # find_package(SDL3) fails, 0 targets load. Pre-wire the project onto
+        # the '$Preset' PRESET profile so the hammer is live on open. CLion
+        # rewrites .idea on exit, so it MUST be closed while we patch.
+        $running = Get-Process clion64 -ErrorAction SilentlyContinue
+        if ($running) {
+            Warn "Closing the running CLion so the project wiring sticks (CLion rewrites .idea on exit)..."
+            $running | Stop-Process -Force
+            Start-Sleep -Seconds 2
+        }
+        $presetFix = Join-Path $RepoRoot 'tools\enable_clion_preset.ps1'
+        if (Test-Path $presetFix) {
+            Info "Wiring CLion onto the '$Preset' preset profile (so the Build/Run hammer isn't greyed out)..."
+            & $presetFix -RepoRoot $RepoRoot -PrimaryProfile $Preset
+        } else {
+            Warn "Preset-wiring helper not found ($presetFix) — you'll need to enable the '$Preset' profile in CLion manually."
         }
         $target = Get-ProjectExeName
         Stamp-RunConfig
